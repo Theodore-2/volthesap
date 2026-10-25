@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="Elektrikli aracının gerçek şarj maliyetini, tüketimini ve faturadaki birim fiyatını hesapla.">
+  <meta name="theme-color" content="#0b0d0c">
+  <title>VoltHesap — Elektrikli araç maliyet hesabı</title>
+  <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#top" aria-label="VoltHesap ana sayfa"><span class="brand-mark">V</span><span>VoltHesap</span></a>
+    <nav aria-label="Ana menü"><a href="#hesapla">Hesapla</a><a href="#fatura">Fatura oku</a><a href="#rehber">Nasıl çalışır?</a></nav>
+    <a class="pill" href="#hesapla">Ücretsiz hesapla <span>↗</span></a>
+  </header>
+
+  <main id="top">
+    <section class="hero">
+      <div class="eyebrow"><span></span> Türkiye'nin elektrikli araç hesap makinesi</div>
+      <h1>Şarjdan önce<br><em>hesabını bil.</em></h1>
+      <p>Aracının gerçek tüketimini, evde şarj maliyetini ve benzinliye göre farkını tek ekranda gör. Üyelik yok, verilerin cihazında kalır.</p>
+      <div class="hero-actions"><a class="button primary" href="#hesapla">Hemen hesapla <span>↓</span></a><a class="button ghost" href="#fatura">PDF faturanı okut</a></div>
+      <div class="ticker" aria-label="Örnek hesaplama"><span>ÖRNEK</span><strong>100 km</strong><i>×</i><strong>17,5 kWh</strong><i>×</i><strong>3,00 ₺</strong><i>=</i><b>52,50 ₺</b></div>
+    </section>
+
+    <section class="calculator-wrap" id="hesapla">
+      <div class="section-head"><div><span class="kicker">01 / MALİYET</span><h2>Yol ne kadara geliyor?</h2></div><p>Değerleri kendi aracına ve tarifene göre değiştir. Sonuç anında güncellenir.</p></div>
+      <div class="calculator">
+        <form class="form-panel" id="calcForm">
+          <label>Mesafe <span>km</span><input id="distance" type="number" inputmode="decimal" min="1" step="1" value="100"></label>
+          <label>Ortalama tüketim <span>kWh / 100 km</span><input id="consumption" type="number" inputmode="decimal" min="1" step="0.1" value="17.5"></label>
+          <label>Elektrik birim fiyatı <span>₺ / kWh</span><input id="electricity" type="number" inputmode="decimal" min="0" step="0.01" value="3"></label>
+          <label>Şarj kaybı <span>%</span><input id="loss" type="number" inputmode="decimal" min="0" max="50" step="1" value="10"></label>
+          <details><summary>Benzinli araçla karşılaştır</summary><div class="details-grid"><label>Benzin tüketimi <span>L / 100 km</span><input id="fuelConsumption" type="number" min="0" step="0.1" value="7"></label><label>Benzin fiyatı <span>₺ / L</span><input id="fuelPrice" type="number" min="0" step="0.01" value="50"></label></div></details>
+          <p class="hint">Birim fiyatını faturandan bulmak için aşağıdaki PDF okuyucuyu kullanabilirsin.</p>
+        </form>
+        <aside class="result-panel" aria-live="polite">
+          <span class="result-label">TAHMİNİ ŞARJ MALİYETİ</span>
+          <div class="big-number"><strong id="totalCost">57,75</strong><span>₺</span></div>
+          <p id="routeText">100 km yol için, şarj kaybı dahil</p>
+          <div class="result-grid"><div><span>Şebekeden çekilen</span><b id="gridEnergy">19,25 kWh</b></div><div><span>100 km maliyeti</span><b id="per100">57,75 ₺</b></div><div><span>Benzinli maliyeti</span><b id="fuelCost">350,00 ₺</b></div><div class="saving"><span>Tahmini fark</span><b id="saving">292,25 ₺</b></div></div>
+          <div class="bar"><span id="evBar"></span></div><div class="bar-labels"><span>Elektrikli</span><span id="savingPercent">%84 daha düşük</span><span>Benzinli</span></div>
+          <button class="share" id="shareBtn" type="button">Sonucu paylaş <span>↗</span></button>
+        </aside>
+      </div>
+    </section>
+
+    <section class="invoice" id="fatura">
+      <div class="invoice-copy"><span class="kicker">02 / FATURA OKUYUCU</span><h2>Faturayı bırak,<br><em>birim fiyatı bulalım.</em></h2><p>Elektrik faturandaki tüketim ve toplam tutarı cihazında okuyup yaklaşık birim maliyeti çıkarır. Dosyan hiçbir sunucuya yüklenmez.</p><div class="privacy"><span>✓</span><div><b>Yerel ve gizli</b><small>PDF yalnızca bu tarayıcıda işlenir.</small></div></div></div>
+      <div class="upload-card">
+        <input id="pdfInput" type="file" accept="application/pdf" hidden>
+        <button class="dropzone" id="dropzone" type="button"><span class="upload-icon">↥</span><b>PDF faturanı buraya bırak</b><small>veya dosya seçmek için tıkla · Maks. 10 MB</small></button>
+        <div class="pdf-status" id="pdfStatus" hidden><div><span id="fileName">fatura.pdf</span><small id="pdfMessage">Belge okunuyor…</small></div><button id="removePdf" aria-label="Dosyayı kaldır">×</button></div>
+        <div class="invoice-result" id="invoiceResult" hidden><div><span>Bulunan tüketim</span><b id="foundKwh">—</b></div><div><span>Bulunan tutar</span><b id="foundTotal">—</b></div><div class="accent"><span>Yaklaşık birim fiyat</span><b id="foundRate">—</b></div><button id="useRate" type="button">Bu fiyatla hesapla</button></div>
+        <details class="manual"><summary>PDF okunmadı mı? Metni yapıştır</summary><textarea id="invoiceText" rows="4" placeholder="Faturadaki tüketim ve toplam tutarın geçtiği bölümü buraya yapıştır…"></textarea><button type="button" id="analyzeText">Metni analiz et</button></details>
+      </div>
+    </section>
+
+    <section class="guide" id="rehber">
+      <div class="section-head"><div><span class="kicker">03 / İPUÇLARI</span><h2>Daha gerçekçi sonuç için</h2></div></div>
+      <div class="guide-grid"><article><span>01</span><h3>Göstergeyi referans al</h3><p>Son 500–1.000 km ortalama tüketimin, katalog verisinden daha gerçekçi sonuç verir.</p></article><article><span>02</span><h3>Şarj kaybını unutma</h3><p>Ev tipi AC şarjda kablo, dönüştürücü ve batarya nedeniyle genellikle ek enerji çekilir.</p></article><article><span>03</span><h3>Tarifeni kontrol et</h3><p>Faturandaki toplam bedel ve kWh değerinden efektif birim fiyatını hesaplayabilirsin.</p></article></div>
+    </section>
+  </main>
+  <footer><div class="brand"><span class="brand-mark">V</span><span>VoltHesap</span></div><p>Elektrikli yolculuğun sade hesabı.</p><span>Sonuçlar tahminidir · © 2026</span></footer>
+  <div class="toast" id="toast" role="status">Bağlantı kopyalandı</div>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
