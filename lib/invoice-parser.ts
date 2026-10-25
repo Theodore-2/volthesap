@@ -1,0 +1,118 @@
+export type InvoiceLineItemCategory =
+  | "energy"
+  | "distribution"
+  | "tax"
+  | "fund"
+  | "fixed_fee"
+  | "discount"
+  | "other";
+
+export type InvoiceLineItem = {
+  category: InvoiceLineItemCategory;
+  label: string;
+  amount: number;
+};
+
+export type InvoiceResult = {
+  kwh: number;
+  total: number;
+  rate: number;
+  confidence: number;
+  lineItems: InvoiceLineItem[];
+};
+
+export function parseLocaleNumber(value?: string) {
+  if (!value) return null;
+
+  let normalized = value
+    .replace(/\s/g, "")
+    .replace(/₺|TL|TRY/gi, "");
+
+  if (normalized.includes(",") && normalized.includes(".")) {
+    normalized = normalized.lastIndexOf(",") > normalized.lastIndexOf(".")
+      ? normalized.replace(/\./g, "").replace(",", ".")
+      : normalized.replace(/,/g, "");
+  } else if (normalized.includes(",")) {
+    normalized = normalized.replace(/\./g, "").replace(",", ".");
+  } else if (/^\d{1,3}(?:\.\d{3})+$/.test(normalized)) {
+    normalized = normalized.replace(/\./g, "");
+  }
+
+  const result = Number(normalized);
+  return Number.isFinite(result) ? result : null;
+}
+
+function firstNumber(text: string, patterns: RegExp[]) {
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    const value = parseLocaleNumber(match?.[1]);
+    if (value !== null) return value;
+  }
+
+  return null;
+}
+
+function extractLineItem(
+  text: string,
+  category: InvoiceLineItemCategory,
+  label: string,
+  patterns: RegExp[],
+): InvoiceLineItem | null {
+  const amount = firstNumber(text, patterns);
+  return amount === null ? null : { category, label, amount };
+}
+
+export function extractInvoice(text: string): InvoiceResult | null {
+  const clean = text.normalize("NFKC").replace(/\s+/g, " ").trim();
+
+  const kwh = firstNumber(clean, [
+    /(?:toplam\s+)?(?:aktif\s+)?(?:enerji\s+)?tüketim(?:\s+miktarı)?[^\d]{0,45}([\d.,]+)\s*kwh/i,
+    /(?:fatura\s+)?tüketimi[^\d]{0,35}([\d.,]+)\s*kwh/i,
+    /([\d.,]+)\s*kwh(?!\s*\/)/i,
+  ]);
+
+  const total = firstNumber(clean, [
+    /(?:ödenecek\s+tutar|fatura\s+tutarı|genel\s+toplam|toplam\s+tutar)[^\d]{0,35}([\d.,]+)\s*(?:tl|₺|try)/i,
+    /(?:ödenecek\s+tutar|fatura\s+tutarı|genel\s+toplam)[^\d]{0,35}([\d.,]+)/i,
+  ]);
+
+  if (kwh === null || total === null || kwh <= 0 || total < 0) return null;
+
+  const candidates = [
+    extractLineItem(clean, "energy", "Energy charge", [
+      /(?:aktif\s+)?enerji\s+(?:tüketim\s+)?bedeli[^\d]{0,35}([\d.,]+)\s*(?:tl|₺|try)/i,
+      /tüketim\s+bedeli[^\d]{0,35}([\d.,]+)\s*(?:tl|₺|try)/i,
+    ]),
+    extractLineItem(clean, "distribution", "Distribution charge", [
+      /dağıtım\s+bedeli[^\d]{0,35}([\d.,]+)\s*(?:tl|₺|try)/i,
+    ]),
+    extractLineItem(clean, "tax", "Electricity consumption tax", [
+      /(?:elektrik\s+tüketim\s+vergisi|belediye\s+tüketim\s+vergisi|btv)[^\d]{0,35}([\d.,]+)\s*(?:tl|₺|try)/i,
+    ]),
+    extractLineItem(clean, "tax", "VAT", [
+      /(?:katma\s+değer\s+vergisi|kdv)[^\d]{0,35}([\d.,]+)\s*(?:tl|₺|try)/i,
+    ]),
+    extractLineItem(clean, "fund", "Energy fund", [
+      /enerji\s+fonu[^\d]{0,35}([\d.,]+)\s*(?:tl|₺|try)/i,
+    ]),
+    extractLineItem(clean, "discount", "Discount", [
+      /(?:indirim|iskonto)[^\d]{0,35}([\d.,]+)\s*(?:tl|₺|try)/i,
+    ]),
+  ];
+
+  const lineItems = candidates.filter((item): item is InvoiceLineItem => item !== null);
+  const lineItemTotal = lineItems.reduce(
+    (sum, item) => sum + (item.category === "discount" ? -item.amount : item.amount),
+    0,
+  );
+  const matchesTotal = lineItems.length > 0 && Math.abs(lineItemTotal - total) <= Math.max(1, total * 0.03);
+  const confidence = Math.min(1, 0.7 + (lineItems.length > 0 ? 0.15 : 0) + (matchesTotal ? 0.15 : 0));
+
+  return {
+    kwh,
+    total,
+    rate: total / kwh,
+    confidence,
+    lineItems,
+  };
+}
