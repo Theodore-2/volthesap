@@ -59,6 +59,29 @@ test("extracts invoice multipliers and tax rates", () => {
   assert.equal(result.lineItems[3].taxRatePercent, 20);
 });
 
+test("extracts Enerjisa table values from OCR text", () => {
+  const result = extractInvoice(
+    [
+      "Ödenecek Tutar 9.310,00 TL",
+      "Aktif Enerji Tüketim Bedeli 1.387,922 3,50000000 4.857,73",
+      "Elk. Dağıtım Bedeli 1.387,922 2,42490000 3.365,57",
+      "Elekt. ve Hvg. Tük. Ver. 242,89",
+      "KDV %10 (Matrah 8.466,19 TL) 846,62 TL",
+      "Fatura Tutarı 9.312,81 TL",
+    ].join(" "),
+  );
+
+  assert.ok(result);
+  assert.equal(result.kwh, 1387.922);
+  assert.equal(result.total, 9310);
+  assert.equal(result.lineItems[0].amount, 4857.73);
+  assert.equal(result.lineItems[0].unitPrice, 3.5);
+  assert.equal(result.lineItems[1].amount, 3365.57);
+  assert.equal(result.lineItems[1].unitPrice, 2.4249);
+  assert.equal(result.lineItems[2].amount, 242.89);
+  assert.equal(result.lineItems[3].amount, 846.62);
+});
+
 test("does not report partial or invalid invoices", () => {
   assert.equal(extractInvoice("Ödenecek tutar 500,00 TL"), null);
   assert.equal(extractInvoice("Tüketim 0 kWh Genel toplam 0 TL"), null);
