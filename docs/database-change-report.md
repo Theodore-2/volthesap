@@ -2,9 +2,9 @@
 
 ## Status
 
-- Change set: Initial VoltHesap schema plus trip and charging-session records
-- Local migration: Prepared
-- Local Postgres execution: Blocked because the Docker daemon remains unresponsive after its disk filled, even after freeing space and restarting Docker Desktop
+- Change set: Initial VoltHesap schema, trip and charging-session records, the sourced EV catalogue, and account-owned custom vehicles
+- Local migration: Applied successfully
+- Local Postgres execution: Passed with Docker Desktop and the local Supabase stack
 - Remote Supabase execution: Not run
 - Remote database changes: None
 
@@ -12,6 +12,8 @@
 
 - `supabase/migrations/20261025154342_initial_schema.sql`
 - `supabase/migrations/20261026080006_charging_sessions_and_trip_records.sql`
+- `supabase/migrations/20261026121441_seed_vehicle_catalog.sql`
+- `supabase/migrations/20261026150450_expand_vehicle_catalog_and_custom_vehicles.sql`
 
 ## Proposed tables
 
@@ -31,6 +33,10 @@
 
 The second migration also extends `calculations` with long-trip frequency, average long-trip distance, home charging amperage, voltage, phase count, and observed charger power.
 It seeds verified 2026 charging tariff snapshots and EPDK residential/commercial reference tariff components. Source and caveat details are documented in `docs/data-sources.md`.
+
+The third migration normalizes the vehicle battery-capacity field, records the capacity basis, adds catalogue ordering and specification notes, and seeds eight sourced EV configurations. Vehicle images are repository assets with CC BY-SA 4.0 attribution stored alongside each database record.
+
+The fourth migration expands the catalogue to 18 sourced EV configurations and allows authenticated users to save a custom vehicle when their model is not listed. The 10 newly added catalogue records intentionally have no image reference until reviewed transparent PNG assets are added to the repository. Guests can use the same custom-vehicle form for a one-off calculation without creating a database record.
 
 PDF files and raw PDF text are not stored in the database.
 
@@ -58,6 +64,11 @@ All calculations and analyses work without authentication in the browser. Authen
 
 ## Verification completed
 
+- All three migrations applied to the local Supabase database: Passed
+- Local database schema lint: Passed
+- Local database security and performance advisors: Passed
+- Local migration-to-schema diff: Empty
+- Seeded EV catalogue record review: Passed (18 active configurations)
 - SQL and repository whitespace review: Passed
 - Invoice parser fixture tests: Passed
 - Application ESLint: Passed
@@ -66,7 +77,9 @@ All calculations and analyses work without authentication in the browser. Authen
 
 ## Verification still required
 
-Docker Desktop must respond successfully to `docker version`. After repairing the Docker daemon, run:
+Review the expanded vehicle catalogue after the fourth migration is available to the application, then test custom-vehicle RLS with two separate authenticated users before applying the migration remotely.
+
+The following local checks can be rerun at any time:
 
 ```bash
 npm run supabase:start
@@ -74,8 +87,6 @@ npm run supabase:reset
 npm run supabase:lint
 npm run supabase:types
 ```
-
-Review the generated `lib/database.types.ts` file and test RLS with two separate authenticated users before applying the migration remotely.
 
 ## Remote application procedure
 

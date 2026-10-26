@@ -2,6 +2,31 @@
 
 Last manual verification: 2026-10-26
 
+## Electric vehicle catalogue
+
+The initial catalogue contains eight Turkey-relevant battery-electric vehicle configurations. Vehicle specifications are stored in `public.vehicles`, not embedded in the frontend. Each record keeps its manufacturer source, verification date, specification notes, image credit, license, and image source URL.
+
+| Vehicle | Configuration | Manufacturer source |
+| --- | --- | --- |
+| Togg T10X | V2 RWD Long Range | https://trumore-cdn.togg.cloud/EU/TOGG_T10X_0825_CTG_TR.pdf |
+| Togg T10F | V1 RWD Long Range, 19-inch | https://trumore-cdn.togg.cloud/EU/TOGG_T10F_0825_CTG_TR.pdf |
+| Tesla Model Y | Premium Long Range RWD | https://www.tesla.com/tr_tr/learn/introducing-new-model-y |
+| Hyundai IONIQ 5 | 84 kWh RWD | https://www.hyundai.com/content/dam/hyundai/downloads/tr/tr/brosurler/ioniq5-digital-brosur.pdf |
+| BYD SEALION 7 | 160 kW Design | https://www.bydauto.com.tr/storage/pdf/teknik/byd-sealion-7-teknik-ozellikler-ve-donanim-tablosu-23-01-26.pdf |
+| Renault Megane E-Tech | Techno 60 kWh | https://www.renault.com.tr/elektrikli-araclar/megane-e-tech-elektrikli.html |
+| MG MG4 Electric | Luxury 64 kWh | https://www.mg-turkey.com/upi/file/mg-mg4-brosur.pdf |
+| Citroën ë-C3 | 83 kW Electric | https://talep.citroen.com.tr/api/model-pdf?model=yeni-ec3 |
+
+Tesla does not publish a battery-capacity figure for the selected Model Y configuration, so the catalogue intentionally leaves that field empty instead of inserting an inferred value. The other battery fields preserve whether the source describes a gross, usable, or unspecified manufacturer capacity.
+
+Vehicle photos are bundled locally for stable display. All eight are sourced from Wikimedia Commons under CC BY-SA 4.0; the database stores the author and original Commons page so the UI can display attribution. The image files must not be separated from their attribution metadata when reused.
+
+The expanded catalogue also includes Tesla Model 3, Volvo EX30, BMW iX1, Kia EV3, Kia EV6, Škoda Enyaq, Peugeot E-208, Hyundai KONA Electric, BYD ATTO 3, and BYD DOLPHIN. Their technical values come from official manufacturer pages or technical sheets linked directly in the migration.
+
+The expanded records intentionally have no image path yet. Add reviewed transparent assets to `public/vehicles` and update the matching `image_url`, `image_credit`, `image_license`, and `image_source_url` fields. Do not commit an image unless its reuse terms are known.
+
+Signed-in users can save a vehicle that is not in the catalogue. These records live in `user_vehicles` under Row Level Security. Guests can apply the same inputs to the current calculation, but the data remains browser-only and is not written to Supabase.
+
 ## Public charging tariffs
 
 | Network | Published tariffs | Power information | Official source |
