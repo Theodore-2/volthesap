@@ -93,6 +93,14 @@ const chargingLossRates: Record<ChargingSetup, number> = {
 };
 const format = new Intl.NumberFormat("tr-TR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+function logInvoiceDebug(source: string, rawText: string, parsed: InvoiceResult | null) {
+  if (process.env.NODE_ENV === "production") return;
+  console.groupCollapsed(`[VoltHesap invoice] ${source}`);
+  console.log("Raw extracted text:", rawText);
+  console.log("Parsed invoice values:", parsed);
+  console.groupEnd();
+}
+
 export function VoltHesap() {
   const [mode, setMode] = useState<CalculatorMode>("trip");
   const [values, setValues] = useState<Values>(defaults);
@@ -354,6 +362,7 @@ export function VoltHesap() {
         try {
           const { data } = await worker.recognize(file);
           const found = extractInvoice(data.text);
+          logInvoiceDebug(`image OCR · ${file.name}`, data.text, found);
           setInvoice(found);
           setPdfMessage(`Görsel OCR ile okundu · güven %${Math.round(data.confidence)}`);
           notify(found ? "Fatura değerleri bulundu" : "Tüketim ve toplam tutar birlikte bulunamadı");
@@ -372,6 +381,7 @@ export function VoltHesap() {
         text += ` ${content.items.map((item) => "str" in item ? item.str : "").join(" ")}`;
       }
       let found = extractInvoice(text);
+      if (found) logInvoiceDebug(`PDF text · ${file.name}`, text, found);
 
       if (!found) {
         setPdfMessage("PDF metni bulunamadı; sayfalar OCR ile okunuyor…");
@@ -402,6 +412,7 @@ export function VoltHesap() {
           await worker.terminate();
         }
         found = extractInvoice(`${text} ${ocrText}`);
+        logInvoiceDebug(`scanned PDF OCR · ${file.name}`, `${text} ${ocrText}`, found);
       }
 
       setPdfMessage(`${pdf.numPages} sayfa cihazında okundu`);
@@ -410,7 +421,7 @@ export function VoltHesap() {
     } catch { setPdfMessage("Metin otomatik okunamadı; aşağıya yapıştırabilirsin."); }
   }
 
-  function analyzeManual() { const found = extractInvoice(manualText); setInvoice(found); notify(found ? "Fatura değerleri bulundu" : "Tüketim ve toplam tutar birlikte bulunamadı"); }
+  function analyzeManual() { const found = extractInvoice(manualText); logInvoiceDebug("manual text", manualText, found); setInvoice(found); notify(found ? "Fatura değerleri bulundu" : "Tüketim ve toplam tutar birlikte bulunamadı"); }
 
   return <>
     <header className="topbar">

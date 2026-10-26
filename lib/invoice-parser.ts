@@ -86,6 +86,7 @@ export function extractInvoice(text: string): InvoiceResult | null {
   const kwh = firstNumber(clean, [
     /(?:toplam\s+)?(?:aktif\s+)?(?:enerji\s+)?tüketim(?:\s+miktarı)?[^\d]{0,45}([\d.,]+)\s*kwh/i,
     /(?:fatura\s+)?tüketimi[^\d]{0,35}([\d.,]+)\s*kwh/i,
+    /aktif\s+enerji\s+tüketim\s+bedeli[^\d]{0,30}([\d.,]+)/i,
     /([\d.,]+)\s*kwh(?!\s*\/)/i,
   ]);
 
@@ -102,19 +103,23 @@ export function extractInvoice(text: string): InvoiceResult | null {
       /tüketim\s+bedeli[^\d]{0,35}([\d.,]+)\s*(?:tl|₺|try)/i,
     ], [
       /(?:aktif\s+)?enerji\s+(?:tüketim\s+)?bedeli[^\d]{0,20}([\d.,]+)\s*kwh[^\d]{0,20}([\d.,]+)\s*(?:tl|₺|try)?\s*\/?\s*kwh[^\d]{0,20}([\d.,]+)\s*(?:tl|₺|try)/i,
+      /(?:aktif\s+)?enerji\s+(?:tüketim\s+)?bedeli[^\d]{0,20}([\d.,]+)\s+([\d.,]+)\s+([\d.,]+)(?:\s*(?:tl|₺|try))?/i,
     ]),
     extractLineItem(clean, "distribution", "Distribution charge", [
       /dağıtım\s+bedeli[^\d]{0,35}([\d.,]+)\s*(?:tl|₺|try)/i,
     ], [
       /dağıtım\s+bedeli[^\d]{0,20}([\d.,]+)\s*kwh[^\d]{0,20}([\d.,]+)\s*(?:tl|₺|try)?\s*\/?\s*kwh[^\d]{0,20}([\d.,]+)\s*(?:tl|₺|try)/i,
+      /(?:elk\.?\s*)?dağıtım\s+bedeli[^\d]{0,20}([\d.,]+)\s+([\d.,]+)\s+([\d.,]+)(?:\s*(?:tl|₺|try))?/i,
     ]),
     extractLineItem(clean, "tax", "Electricity consumption tax", [
       /(?:elektrik\s+tüketim\s+vergisi|belediye\s+tüketim\s+vergisi|btv)[^\d%]{0,20}%\s*[\d.,]+[^\d]{0,20}([\d.,]+)\s*(?:tl|₺|try)/i,
       /(?:elektrik\s+tüketim\s+vergisi|belediye\s+tüketim\s+vergisi|btv)[^\d]{0,35}([\d.,]+)\s*(?:tl|₺|try)/i,
+      /elekt\.?\s*ve\s*hvg\.?\s*tük\.?\s*ver\.?[^\d]{0,35}([\d.,]+)/i,
     ], [], [
       /(?:elektrik\s+tüketim\s+vergisi|belediye\s+tüketim\s+vergisi|btv)[^\d%]{0,20}%\s*([\d.,]+)/i,
     ]),
     extractLineItem(clean, "tax", "VAT", [
+      /(?:katma\s+değer\s+vergisi|kdv)[^\d%]{0,20}%\s*[\d.,]+[^\d]{0,20}[\d.,]+\s*(?:tl|₺|try)?[^\d]{0,20}([\d.,]+)\s*(?:tl|₺|try)/i,
       /(?:katma\s+değer\s+vergisi|kdv)[^\d%]{0,20}%\s*[\d.,]+[^\d]{0,20}([\d.,]+)\s*(?:tl|₺|try)/i,
       /(?:katma\s+değer\s+vergisi|kdv)[^\d]{0,35}([\d.,]+)\s*(?:tl|₺|try)/i,
     ], [], [
