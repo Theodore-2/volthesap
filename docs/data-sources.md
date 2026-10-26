@@ -23,9 +23,15 @@ Vehicle photos are bundled locally for stable display. All eight are sourced fro
 
 The expanded catalogue also includes Tesla Model 3, Volvo EX30, BMW iX1, Kia EV3, Kia EV6, Škoda Enyaq, Peugeot E-208, Hyundai KONA Electric, BYD ATTO 3, and BYD DOLPHIN. Their technical values come from official manufacturer pages or technical sheets linked directly in the migration.
 
+The Turkey-priority catalogue update adds Kia EV2 Air Long Range, KG Mobility Torres EVX MY26, and MINI Countryman E. The first seven catalogue positions follow the user-provided September 2026 Turkey sales order: Togg T10X, Togg T10F, Tesla Model Y, Kia EV2, Volvo EX30, KG Mobility Torres EVX, and MINI Countryman. This ranking is presentation metadata, not a technical specification or a permanently trusted sales dataset.
+
 The follow-up catalogue migration adds both current Turkey-market BYD SEAL configurations (160 kW Design RWD and 390 kW AWD Excellence), the refreshed short-range Tesla Model Y Premium RWD, the Model Y RWD (Standard), and the standard-range Model 3 Premium RWD. Tesla battery capacity and range remain empty where the cited Turkey-market page only publishes official WLTP consumption. No third-party estimate is stored as a manufacturer value.
 
 The expanded records intentionally have no image path yet. Add reviewed transparent assets to `public/vehicles` and update the matching `image_url`, `image_credit`, `image_license`, and `image_source_url` fields. Do not commit an image unless its reuse terms are known.
+
+VoltHesap-owned generated catalogue renders are stored under `public/vehicles/generated`. Tesla Model Y, Tesla Model 3, Volvo EX30, BMW iX1, Kia EV2, Kia EV6, KG Mobility Torres EVX, MINI Countryman, and Škoda Enyaq currently use optimized WebP assets. The renders are presentation assets and must not be treated as technical references for trim-specific equipment.
+
+The Togg T10X and T10F transparent WebP cutouts are derived from the catalogue's existing CC BY-SA 4.0 Wikimedia photos. Their original author, license, and source URL remain attached to the database records and must be preserved with the derived assets.
 
 Signed-in users can save a vehicle that is not in the catalogue. These records live in `user_vehicles` under Row Level Security. Guests can apply the same inputs to the current calculation, but the data remains browser-only and is not written to Supabase.
 

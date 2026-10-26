@@ -503,7 +503,18 @@ function VehiclePicker({ vehicles, selectedVehicleId, onSelect }: {
   selectedVehicleId: string | null;
   onSelect: (vehicle: VehicleCatalogItem) => void;
 }) {
+  const [query, setQuery] = useState("");
   const selectedVehicle = vehicles.find((vehicle) => vehicle.id === selectedVehicleId) ?? null;
+  const filteredVehicles = useMemo(() => {
+    const normalizedQuery = normalizeVehicleSearch(query);
+    if (!normalizedQuery) return vehicles;
+    return vehicles.filter((vehicle) => normalizeVehicleSearch([
+      vehicle.make,
+      vehicle.model,
+      vehicle.variant,
+      vehicle.modelYear,
+    ].filter(Boolean).join(" ")).includes(normalizedQuery));
+  }, [query, vehicles]);
   const drivetrainLabels = { front: "Önden çekiş", rear: "Arkadan itiş", all: "Dört çeker" } as const;
 
   return <section className="vehicle-picker" aria-labelledby="vehicle-picker-title">
@@ -511,9 +522,20 @@ function VehiclePicker({ vehicles, selectedVehicleId, onSelect }: {
       <div><span className="kicker">ARACINI SEÇ</span><h3 id="vehicle-picker-title">Katalog değerleriyle başla</h3></div>
       <p>Modelini seçince batarya ve WLTP tüketimi otomatik gelir. Kendi kullanım ortalamanı biliyorsan aşağıda değiştirebilirsin.</p>
     </div>
+    {vehicles.length > 0 && <label className="vehicle-search">
+      <span aria-hidden="true">⌕</span>
+      <input
+        type="search"
+        value={query}
+        onChange={(event) => setQuery(event.target.value)}
+        placeholder="Marka, model veya versiyon ara"
+        aria-label="Araç kataloğunda ara"
+      />
+      <small>{filteredVehicles.length} araç</small>
+    </label>}
     {vehicles.length > 0 ? <>
-      <div className="vehicle-strip">
-        {vehicles.map((vehicle) => <button
+      {filteredVehicles.length > 0 ? <div className="vehicle-strip">
+        {filteredVehicles.map((vehicle) => <button
           type="button"
           key={vehicle.id}
           className={`vehicle-card${selectedVehicleId === vehicle.id ? " selected" : ""}`}
@@ -521,12 +543,12 @@ function VehiclePicker({ vehicles, selectedVehicleId, onSelect }: {
           onClick={() => onSelect(vehicle)}
         >
           <span className="vehicle-image-wrap">{vehicle.imageUrl
-            ? <Image src={vehicle.imageUrl} alt={`${vehicle.make} ${vehicle.model}`} width={640} height={360} sizes="(max-width: 800px) 78vw, 235px" />
+            ? <Image className={vehicle.imageUrl.includes("/generated/") ? "generated-vehicle-image" : undefined} src={vehicle.imageUrl} alt={`${vehicle.make} ${vehicle.model}`} width={640} height={360} sizes="(max-width: 800px) 78vw, 235px" />
             : <span className="vehicle-image-placeholder">Görsel hazırlanıyor</span>}</span>
           <span className="vehicle-card-copy"><small>{vehicle.make} · {vehicle.modelYear ?? ""}</small><b>{vehicle.model}</b><em>{vehicle.variant}</em></span>
           <span className="vehicle-card-metrics"><span><small>WLTP</small><b>{vehicle.wltpRangeKm ? `${format.format(vehicle.wltpRangeKm).replace(",00", "")} km` : "—"}</b></span><span><small>Tüketim</small><b>{format.format(vehicle.consumptionKwh100Km)} kWh</b></span></span>
         </button>)}
-      </div>
+      </div> : <div className="vehicle-search-empty"><b>Bu aramayla eşleşen araç yok.</b><span>Marka veya model adını kısaltarak yeniden deneyebilirsin.</span></div>}
       {selectedVehicle && <div className="selected-vehicle-detail">
         <div><span>Batarya</span><b>{selectedVehicle.batteryCapacityKwh ? `${format.format(selectedVehicle.batteryCapacityKwh)} kWh` : "Üretici açıklamıyor"}</b></div>
         <div><span>AC / DC</span><b>{selectedVehicle.acChargePowerKw ? format.format(selectedVehicle.acChargePowerKw).replace(",00", "") : "—"} / {selectedVehicle.dcChargePowerKw ? format.format(selectedVehicle.dcChargePowerKw).replace(",00", "") : "—"} kW</b></div>
@@ -540,6 +562,15 @@ function VehiclePicker({ vehicles, selectedVehicleId, onSelect }: {
       </div>}
     </> : <div className="vehicle-empty"><b>Araç kataloğu henüz bu veritabanına yüklenmedi.</b><span>İstersen batarya ve tüketim değerlerini aşağıdan elle girerek devam edebilirsin.</span></div>}
   </section>;
+}
+
+function normalizeVehicleSearch(value: string) {
+  return value
+    .toLocaleLowerCase("tr-TR")
+    .replaceAll("ı", "i")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim();
 }
 
 function mapSavedCustomVehicle(row: SavedCustomVehicleRow): VehicleCatalogItem {
