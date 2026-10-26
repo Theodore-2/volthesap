@@ -39,6 +39,26 @@ test("extracts a detailed Turkish electricity bill breakdown", () => {
   assert.equal(result.confidence, 1);
 });
 
+test("extracts invoice multipliers and tax rates", () => {
+  const result = extractInvoice(
+    [
+      "Toplam tüketim 182,75 kWh",
+      "Enerji tüketim bedeli 182,75 kWh x 1,70944 TL/kWh = 312,40 TL",
+      "Dağıtım bedeli 182,75 kWh x 1,12235 TL/kWh = 205,11 TL",
+      "BTV %5 25,99 TL",
+      "KDV %20 108,15 TL",
+      "Genel toplam 651,65 TL",
+    ].join(" "),
+  );
+
+  assert.ok(result);
+  assert.equal(result.lineItems[0].quantity, 182.75);
+  assert.equal(result.lineItems[0].unitPrice, 1.70944);
+  assert.equal(result.lineItems[1].unitPrice, 1.12235);
+  assert.equal(result.lineItems[2].taxRatePercent, 5);
+  assert.equal(result.lineItems[3].taxRatePercent, 20);
+});
+
 test("does not report partial or invalid invoices", () => {
   assert.equal(extractInvoice("Ödenecek tutar 500,00 TL"), null);
   assert.equal(extractInvoice("Tüketim 0 kWh Genel toplam 0 TL"), null);
