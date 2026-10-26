@@ -3,6 +3,8 @@
 import { extractInvoice, type InvoiceResult } from "@/lib/invoice-parser";
 import { fallbackChargingTariffs, formatTariffLabel, type ChargingTariffOption } from "@/lib/charging-tariffs";
 import { createClient } from "@/lib/supabase/client";
+import { mapVehicleRow, type VehicleCatalogItem, type VehicleCatalogRow } from "@/lib/vehicles";
+import Image from "next/image";
 import Link from "next/link";
 import { ChangeEvent, DragEvent, useEffect, useMemo, useState } from "react";
 
@@ -44,6 +46,16 @@ type ChargeSession = {
   energyKwh: number;
   unitPrice: number;
   setup: ChargingSetup;
+};
+
+type SavedCustomVehicleRow = {
+  id: number;
+  nickname: string | null;
+  custom_make: string;
+  custom_model: string;
+  custom_variant: string | null;
+  custom_battery_capacity_kwh: number | string;
+  custom_consumption_kwh_100km: number | string;
 };
 
 const defaults: Values = {
@@ -100,6 +112,10 @@ export function VoltHesap() {
     { id: "session-2", tariffId: null, provider: "Diğer istasyon", energyKwh: 15, unitPrice: 9.5, setup: "public-dc" },
   ]);
   const [chargingTariffs, setChargingTariffs] = useState<ChargingTariffOption[]>(fallbackChargingTariffs);
+  const [vehicles, setVehicles] = useState<VehicleCatalogItem[]>([]);
+  const [savedCustomVehicles, setSavedCustomVehicles] = useState<VehicleCatalogItem[]>([]);
+  const [userId, setUserId] = useState<string | null>(null);
+  const [selectedVehicleId, setSelectedVehicleId] = useState<string | null>(null);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -110,6 +126,39 @@ export function VoltHesap() {
       (Object.keys(next) as (keyof Values)[]).forEach((key) => { const incoming = Number(params.get(key)); if (Number.isFinite(incoming) && params.has(key)) next[key] = incoming; });
       return next;
     });
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    const supabase = createClient();
+    void supabase.auth.getUser().then(async ({ data }) => {
+      const id = data.user?.id ?? null;
+      if (!active) return;
+      setUserId(id);
+      if (!id) return;
+      const { data: saved } = await supabase
+        .from("user_vehicles")
+        .select("id, nickname, custom_make, custom_model, custom_variant, custom_battery_capacity_kwh, custom_consumption_kwh_100km")
+        .is("vehicle_id", null)
+        .order("created_at", { ascending: false });
+      if (active && saved) setSavedCustomVehicles((saved as SavedCustomVehicleRow[]).map(mapSavedCustomVehicle));
+    });
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    const supabase = createClient();
+    void supabase
+      .from("vehicles")
+      .select("id, slug, make, model, variant, model_year, battery_capacity_kwh, battery_capacity_basis, wltp_range_km, consumption_kwh_100km, body_type, drivetrain, ac_charge_power_kw, dc_charge_power_kw, acceleration_0_100_s, top_speed_kmh, image_url, image_credit, image_license, image_source_url, source_name, source_url, specification_notes")
+      .eq("is_active", true)
+      .order("featured_rank", { ascending: true })
+      .then(({ data }) => {
+        if (!active || !data?.length) return;
+        setVehicles((data as VehicleCatalogRow[]).map(mapVehicleRow));
+      });
+    return () => { active = false; };
   }, []);
 
   useEffect(() => {
@@ -270,6 +319,15 @@ export function VoltHesap() {
   function addSession() { setSessions((current) => [...current, { id: crypto.randomUUID(), tariffId: null, provider: "Diğer istasyon", energyKwh: 0, unitPrice: 0, setup: "public-dc" }]); }
   function updateSession(id: string, patch: Partial<ChargeSession>) { setSessions((current) => current.map((session) => session.id === id ? { ...session, ...patch } : session)); }
   function removeSession(id: string) { setSessions((current) => current.length === 1 ? current : current.filter((session) => session.id !== id)); }
+  function selectVehicle(vehicle: VehicleCatalogItem) {
+    setSelectedVehicleId(vehicle.id);
+    setValues((current) => ({
+      ...current,
+      batteryCapacity: vehicle.batteryCapacityKwh ?? current.batteryCapacity,
+      consumption: vehicle.consumptionKwh100Km,
+    }));
+    notify(`${vehicle.make} ${vehicle.model} değerleri uygulandı`);
+  }
 
   async function share() {
     const text = `VoltHesap sonucu: ${values.distance} km için tahmini maliyet ${format.format(result.cost)} ₺.`;
@@ -343,6 +401,13 @@ export function VoltHesap() {
 
         {mode === "budget" && <>
         <div className="section-head scenario-heading"><div><span className="kicker">02 / ALIŞKANLIK</span><h2>Şarj bütçem</h2></div><p>Günlük kullanımını geleceğe taşı. Sonucu 1, 3, 6 ay ve 1 yıl için ayrı ayrı gör.</p></div>
+        <VehiclePicker vehicles={[...savedCustomVehicles, ...vehicles]} selectedVehicleId={selectedVehicleId} onSelect={selectVehicle} />
+        <CustomVehicleCreator
+          userId={userId}
+          onApply={selectVehicle}
+          onSaved={(vehicle) => setSavedCustomVehicles((current) => [vehicle, ...current])}
+          onMessage={notify}
+        />
         <div className="calculator">
           <div className="form-panel">
             <NumberField label="Mesafe" help="Şimdi maliyetini görmek istediğin yol uzunluğu." unit="km" value={values.distance} onChange={(v) => update("distance", v)} />
@@ -431,6 +496,152 @@ export function VoltHesap() {
     <footer><div className="brand"><span className="brand-mark">V</span><span>VoltHesap</span></div><p>Elektrikli yolculuğun sade hesabı.</p><span>Sonuçlar tahminidir · © 2026</span></footer>
     <div className={`toast${toast ? " show" : ""}`} role="status">{toast}</div>
   </>;
+}
+
+function VehiclePicker({ vehicles, selectedVehicleId, onSelect }: {
+  vehicles: VehicleCatalogItem[];
+  selectedVehicleId: string | null;
+  onSelect: (vehicle: VehicleCatalogItem) => void;
+}) {
+  const selectedVehicle = vehicles.find((vehicle) => vehicle.id === selectedVehicleId) ?? null;
+  const drivetrainLabels = { front: "Önden çekiş", rear: "Arkadan itiş", all: "Dört çeker" } as const;
+
+  return <section className="vehicle-picker" aria-labelledby="vehicle-picker-title">
+    <div className="vehicle-picker-head">
+      <div><span className="kicker">ARACINI SEÇ</span><h3 id="vehicle-picker-title">Katalog değerleriyle başla</h3></div>
+      <p>Modelini seçince batarya ve WLTP tüketimi otomatik gelir. Kendi kullanım ortalamanı biliyorsan aşağıda değiştirebilirsin.</p>
+    </div>
+    {vehicles.length > 0 ? <>
+      <div className="vehicle-strip">
+        {vehicles.map((vehicle) => <button
+          type="button"
+          key={vehicle.id}
+          className={`vehicle-card${selectedVehicleId === vehicle.id ? " selected" : ""}`}
+          aria-pressed={selectedVehicleId === vehicle.id}
+          onClick={() => onSelect(vehicle)}
+        >
+          <span className="vehicle-image-wrap">{vehicle.imageUrl
+            ? <Image src={vehicle.imageUrl} alt={`${vehicle.make} ${vehicle.model}`} width={640} height={360} sizes="(max-width: 800px) 78vw, 235px" />
+            : <span className="vehicle-image-placeholder">Görsel hazırlanıyor</span>}</span>
+          <span className="vehicle-card-copy"><small>{vehicle.make} · {vehicle.modelYear ?? ""}</small><b>{vehicle.model}</b><em>{vehicle.variant}</em></span>
+          <span className="vehicle-card-metrics"><span><small>WLTP</small><b>{vehicle.wltpRangeKm ? `${format.format(vehicle.wltpRangeKm).replace(",00", "")} km` : "—"}</b></span><span><small>Tüketim</small><b>{format.format(vehicle.consumptionKwh100Km)} kWh</b></span></span>
+        </button>)}
+      </div>
+      {selectedVehicle && <div className="selected-vehicle-detail">
+        <div><span>Batarya</span><b>{selectedVehicle.batteryCapacityKwh ? `${format.format(selectedVehicle.batteryCapacityKwh)} kWh` : "Üretici açıklamıyor"}</b></div>
+        <div><span>AC / DC</span><b>{selectedVehicle.acChargePowerKw ? format.format(selectedVehicle.acChargePowerKw).replace(",00", "") : "—"} / {selectedVehicle.dcChargePowerKw ? format.format(selectedVehicle.dcChargePowerKw).replace(",00", "") : "—"} kW</b></div>
+        <div><span>Çekiş</span><b>{selectedVehicle.drivetrain ? drivetrainLabels[selectedVehicle.drivetrain] : "—"}</b></div>
+        <div><span>0–100 / azami hız</span><b>{selectedVehicle.acceleration0100S ? `${format.format(selectedVehicle.acceleration0100S)} sn` : "—"} / {selectedVehicle.topSpeedKmh ? `${selectedVehicle.topSpeedKmh} km/s` : "—"}</b></div>
+        <p>{selectedVehicle.specificationNotes}</p>
+        <div className="vehicle-sources">
+          {selectedVehicle.sourceUrl && <a href={selectedVehicle.sourceUrl} target="_blank" rel="noreferrer">Teknik kaynak ↗</a>}
+          {selectedVehicle.imageSourceUrl && <a href={selectedVehicle.imageSourceUrl} target="_blank" rel="noreferrer">Görsel: {selectedVehicle.imageCredit} · {selectedVehicle.imageLicense} ↗</a>}
+        </div>
+      </div>}
+    </> : <div className="vehicle-empty"><b>Araç kataloğu henüz bu veritabanına yüklenmedi.</b><span>İstersen batarya ve tüketim değerlerini aşağıdan elle girerek devam edebilirsin.</span></div>}
+  </section>;
+}
+
+function mapSavedCustomVehicle(row: SavedCustomVehicleRow): VehicleCatalogItem {
+  return {
+    id: `custom:${row.id}`,
+    slug: `custom-${row.id}`,
+    make: row.custom_make,
+    model: row.custom_model,
+    variant: row.custom_variant ?? row.nickname,
+    modelYear: null,
+    batteryCapacityKwh: Number(row.custom_battery_capacity_kwh),
+    batteryCapacityBasis: "manufacturer",
+    wltpRangeKm: null,
+    consumptionKwh100Km: Number(row.custom_consumption_kwh_100km),
+    bodyType: null,
+    drivetrain: null,
+    acChargePowerKw: null,
+    dcChargePowerKw: null,
+    acceleration0100S: null,
+    topSpeedKmh: null,
+    imageUrl: null,
+    imageCredit: null,
+    imageLicense: null,
+    imageSourceUrl: null,
+    sourceName: "User vehicle",
+    sourceUrl: null,
+    specificationNotes: "Kullanıcının kendi araç bilgileri.",
+  };
+}
+
+function CustomVehicleCreator({ userId, onApply, onSaved, onMessage }: {
+  userId: string | null;
+  onApply: (vehicle: VehicleCatalogItem) => void;
+  onSaved: (vehicle: VehicleCatalogItem) => void;
+  onMessage: (message: string) => void;
+}) {
+  const [make, setMake] = useState("");
+  const [model, setModel] = useState("");
+  const [variant, setVariant] = useState("");
+  const [battery, setBattery] = useState("");
+  const [consumption, setConsumption] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  function draftVehicle(id = "custom:draft"): VehicleCatalogItem | null {
+    const batteryValue = Number(battery);
+    const consumptionValue = Number(consumption);
+    if (!make.trim() || !model.trim() || batteryValue <= 0 || consumptionValue <= 0) return null;
+    return {
+      id, slug: id.replace(":", "-"), make: make.trim(), model: model.trim(), variant: variant.trim() || null,
+      modelYear: null, batteryCapacityKwh: batteryValue, batteryCapacityBasis: "manufacturer", wltpRangeKm: null,
+      consumptionKwh100Km: consumptionValue, bodyType: null, drivetrain: null, acChargePowerKw: null,
+      dcChargePowerKw: null, acceleration0100S: null, topSpeedKmh: null, imageUrl: null, imageCredit: null,
+      imageLicense: null, imageSourceUrl: null, sourceName: "User vehicle", sourceUrl: null,
+      specificationNotes: "Kullanıcının kendi araç bilgileri.",
+    };
+  }
+
+  function applyOnce() {
+    const vehicle = draftVehicle();
+    if (!vehicle) { onMessage("Marka, model, batarya ve tüketim alanlarını doldur"); return; }
+    onApply(vehicle);
+    onMessage("Özel araç bu hesaba uygulandı");
+  }
+
+  async function saveToAccount() {
+    const vehicle = draftVehicle();
+    if (!vehicle || !userId) { onMessage(userId ? "Araç bilgilerini tamamla" : "Aracı kaydetmek için giriş yap"); return; }
+    setSaving(true);
+    const supabase = createClient();
+    const { data, error } = await supabase.from("user_vehicles").insert({
+      user_id: userId,
+      vehicle_id: null,
+      nickname: variant.trim() || `${make.trim()} ${model.trim()}`,
+      custom_make: make.trim(),
+      custom_model: model.trim(),
+      custom_variant: variant.trim() || null,
+      custom_battery_capacity_kwh: Number(battery),
+      custom_consumption_kwh_100km: Number(consumption),
+    }).select("id, nickname, custom_make, custom_model, custom_variant, custom_battery_capacity_kwh, custom_consumption_kwh_100km").single();
+    setSaving(false);
+    if (error || !data) { onMessage("Araç kaydedilemedi"); return; }
+    const saved = mapSavedCustomVehicle(data as SavedCustomVehicleRow);
+    onSaved(saved);
+    onApply(saved);
+    onMessage("Araç hesabına kaydedildi");
+  }
+
+  return <details className="custom-vehicle">
+    <summary>Aracın listede yok mu?</summary>
+    <p>Bilgilerini bir kez kullanabilir veya giriş yaptıysan hesabına kaydedebilirsin.</p>
+    <div className="custom-vehicle-grid">
+      <label><span>Marka</span><input value={make} onChange={(event) => setMake(event.target.value)} placeholder="Örn. Opel" /></label>
+      <label><span>Model</span><input value={model} onChange={(event) => setModel(event.target.value)} placeholder="Örn. Corsa Electric" /></label>
+      <label><span>Versiyon</span><input value={variant} onChange={(event) => setVariant(event.target.value)} placeholder="İsteğe bağlı" /></label>
+      <label><span>Batarya</span><div><input type="number" min="0.1" step="0.1" value={battery} onChange={(event) => setBattery(event.target.value)} /><small>kWh</small></div></label>
+      <label><span>Ortalama tüketim</span><div><input type="number" min="0.1" step="0.1" value={consumption} onChange={(event) => setConsumption(event.target.value)} /><small>kWh/100 km</small></div></label>
+    </div>
+    <div className="custom-vehicle-actions">
+      <button type="button" onClick={applyOnce}>Tek seferlik kullan</button>
+      <button type="button" className="primary" disabled={saving} onClick={saveToAccount}>{userId ? (saving ? "Kaydediliyor…" : "Hesabıma kaydet") : "Kaydetmek için giriş yap"}</button>
+    </div>
+  </details>;
 }
 
 function ModeButton({ active, number, title, description, onClick }: { active: boolean; number: string; title: string; description: string; onClick: () => void }) {
