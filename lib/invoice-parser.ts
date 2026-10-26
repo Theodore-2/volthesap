@@ -11,6 +11,10 @@ export type InvoiceLineItem = {
   category: InvoiceLineItemCategory;
   label: string;
   amount: number;
+  quantity?: number;
+  unit?: string;
+  unitPrice?: number;
+  taxRatePercent?: number;
 };
 
 export type InvoiceResult = {
@@ -57,9 +61,23 @@ function extractLineItem(
   category: InvoiceLineItemCategory,
   label: string,
   patterns: RegExp[],
+  detailsPatterns: RegExp[] = [],
+  taxRatePatterns: RegExp[] = [],
 ): InvoiceLineItem | null {
+  for (const pattern of detailsPatterns) {
+    const match = text.match(pattern);
+    const quantity = parseLocaleNumber(match?.[1]);
+    const unitPrice = parseLocaleNumber(match?.[2]);
+    const amount = parseLocaleNumber(match?.[3]);
+    if (quantity !== null && unitPrice !== null && amount !== null) {
+      return { category, label, amount, quantity, unit: "kWh", unitPrice };
+    }
+  }
+
   const amount = firstNumber(text, patterns);
-  return amount === null ? null : { category, label, amount };
+  if (amount === null) return null;
+  const taxRatePercent = firstNumber(text, taxRatePatterns);
+  return { category, label, amount, ...(taxRatePercent === null ? {} : { taxRatePercent }) };
 }
 
 export function extractInvoice(text: string): InvoiceResult | null {
@@ -82,15 +100,25 @@ export function extractInvoice(text: string): InvoiceResult | null {
     extractLineItem(clean, "energy", "Energy charge", [
       /(?:aktif\s+)?enerji\s+(?:tüketim\s+)?bedeli[^\d]{0,35}([\d.,]+)\s*(?:tl|₺|try)/i,
       /tüketim\s+bedeli[^\d]{0,35}([\d.,]+)\s*(?:tl|₺|try)/i,
+    ], [
+      /(?:aktif\s+)?enerji\s+(?:tüketim\s+)?bedeli[^\d]{0,20}([\d.,]+)\s*kwh[^\d]{0,20}([\d.,]+)\s*(?:tl|₺|try)?\s*\/?\s*kwh[^\d]{0,20}([\d.,]+)\s*(?:tl|₺|try)/i,
     ]),
     extractLineItem(clean, "distribution", "Distribution charge", [
       /dağıtım\s+bedeli[^\d]{0,35}([\d.,]+)\s*(?:tl|₺|try)/i,
+    ], [
+      /dağıtım\s+bedeli[^\d]{0,20}([\d.,]+)\s*kwh[^\d]{0,20}([\d.,]+)\s*(?:tl|₺|try)?\s*\/?\s*kwh[^\d]{0,20}([\d.,]+)\s*(?:tl|₺|try)/i,
     ]),
     extractLineItem(clean, "tax", "Electricity consumption tax", [
+      /(?:elektrik\s+tüketim\s+vergisi|belediye\s+tüketim\s+vergisi|btv)[^\d%]{0,20}%\s*[\d.,]+[^\d]{0,20}([\d.,]+)\s*(?:tl|₺|try)/i,
       /(?:elektrik\s+tüketim\s+vergisi|belediye\s+tüketim\s+vergisi|btv)[^\d]{0,35}([\d.,]+)\s*(?:tl|₺|try)/i,
+    ], [], [
+      /(?:elektrik\s+tüketim\s+vergisi|belediye\s+tüketim\s+vergisi|btv)[^\d%]{0,20}%\s*([\d.,]+)/i,
     ]),
     extractLineItem(clean, "tax", "VAT", [
+      /(?:katma\s+değer\s+vergisi|kdv)[^\d%]{0,20}%\s*[\d.,]+[^\d]{0,20}([\d.,]+)\s*(?:tl|₺|try)/i,
       /(?:katma\s+değer\s+vergisi|kdv)[^\d]{0,35}([\d.,]+)\s*(?:tl|₺|try)/i,
+    ], [], [
+      /(?:katma\s+değer\s+vergisi|kdv)[^\d%]{0,20}%\s*([\d.,]+)/i,
     ]),
     extractLineItem(clean, "fund", "Energy fund", [
       /enerji\s+fonu[^\d]{0,35}([\d.,]+)\s*(?:tl|₺|try)/i,
