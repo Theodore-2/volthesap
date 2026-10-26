@@ -1,6 +1,7 @@
 "use client";
 
 import { extractInvoice, type InvoiceResult } from "@/lib/invoice-parser";
+import { BrandLogo } from "@/components/brand-logo";
 import { fallbackChargingTariffs, formatTariffLabel, type ChargingTariffOption } from "@/lib/charging-tariffs";
 import { createClient } from "@/lib/supabase/client";
 import { mapVehicleRow, type VehicleCatalogItem, type VehicleCatalogRow } from "@/lib/vehicles";
@@ -358,7 +359,7 @@ export function VoltHesap() {
 
   return <>
     <header className="topbar">
-      <a className="brand" href="#top" aria-label="VoltHesap ana sayfa"><span className="brand-mark">V</span><span>VoltHesap</span></a>
+      <a className="brand" href="#top" aria-label="VoltHesap ana sayfa"><BrandLogo priority /></a>
       <nav aria-label="Ana menü"><button type="button" onClick={() => openMode("trip")}>Yol hesabı</button><button type="button" onClick={() => openMode("budget")}>Şarj bütçesi</button><button type="button" onClick={() => openMode("home")}>Ev &amp; fatura</button></nav>
       <Link className="pill" href="/auth/login">Giriş yap <span>↗</span></Link>
     </header>
@@ -493,7 +494,16 @@ export function VoltHesap() {
 
       <section className="guide" id="rehber"><div className="section-head"><div><span className="kicker">03 / İPUÇLARI</span><h2>Daha gerçekçi sonuç için</h2></div></div><div className="guide-grid"><article><span>01</span><h3>Göstergeyi referans al</h3><p>Son 500–1.000 km ortalama tüketimin, katalog verisinden daha gerçekçi sonuç verir.</p></article><article><span>02</span><h3>Şarj kaybını unutma</h3><p>Ev tipi AC şarjda kablo, dönüştürücü ve batarya nedeniyle genellikle ek enerji çekilir.</p></article><article><span>03</span><h3>Tarifeni kontrol et</h3><p>Faturandaki toplam bedel ve kWh değerinden efektif birim fiyatını hesaplayabilirsin.</p></article></div></section>
     </main>
-    <footer><div className="brand"><span className="brand-mark">V</span><span>VoltHesap</span></div><p>Elektrikli yolculuğun sade hesabı.</p><span>Sonuçlar tahminidir · © 2026</span></footer>
+    <footer>
+      <div className="brand"><BrandLogo /></div>
+      <p>Elektrikli yolculuğun sade hesabı.</p>
+      <nav className="footer-links" aria-label="İletişim ve geliştirici bağlantıları">
+        <a href="mailto:hello@volthesap.autos?subject=VoltHesap%20hakkında">İletişim</a>
+        <a href="https://ardacimen.dev" target="_blank" rel="noreferrer">Arda Çimen</a>
+        <a href="https://linkedin.com/in/-arda-cimen" target="_blank" rel="noreferrer">LinkedIn</a>
+      </nav>
+      <span>Sonuçlar tahminidir · © 2026</span>
+    </footer>
     <div className={`toast${toast ? " show" : ""}`} role="status">{toast}</div>
   </>;
 }
