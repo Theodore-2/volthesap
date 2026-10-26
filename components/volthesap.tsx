@@ -1,6 +1,7 @@
 "use client";
 
 import { extractInvoice, type InvoiceResult } from "@/lib/invoice-parser";
+import { BrandLogo } from "@/components/brand-logo";
 import { fallbackChargingTariffs, formatTariffLabel, type ChargingTariffOption } from "@/lib/charging-tariffs";
 import { createClient } from "@/lib/supabase/client";
 import { mapVehicleRow, type VehicleCatalogItem, type VehicleCatalogRow } from "@/lib/vehicles";
@@ -337,10 +338,31 @@ export function VoltHesap() {
     } catch (error) { if (error instanceof Error && error.name !== "AbortError") notify("Paylaşım açılamadı"); }
   }
 
-  async function readPdf(file: File) {
-    if (file.type !== "application/pdf" || file.size > 10 * 1024 * 1024) { notify("10 MB altında bir PDF seç"); return; }
+  async function readInvoiceFile(file: File) {
+    const isPdf = file.type === "application/pdf";
+    const isImage = /^image\/(?:jpeg|png|webp)$/.test(file.type);
+    if ((!isPdf && !isImage) || file.size > 10 * 1024 * 1024) { notify("10 MB altında PDF, JPG, PNG veya WebP seç"); return; }
     setFileName(file.name); setPdfMessage("Belge cihazında okunuyor…"); setInvoice(null);
     try {
+      if (isImage) {
+        const { createWorker } = await import("tesseract.js");
+        const worker = await createWorker(["tur", "eng"], undefined, {
+          logger: ({ status, progress }) => {
+            if (status === "recognizing text") setPdfMessage(`Görsel okunuyor · %${Math.round(progress * 100)}`);
+          },
+        });
+        try {
+          const { data } = await worker.recognize(file);
+          const found = extractInvoice(data.text);
+          setInvoice(found);
+          setPdfMessage(`Görsel OCR ile okundu · güven %${Math.round(data.confidence)}`);
+          notify(found ? "Fatura değerleri bulundu" : "Tüketim ve toplam tutar birlikte bulunamadı");
+        } finally {
+          await worker.terminate();
+        }
+        return;
+      }
+
       const pdfjs = await import("pdfjs-dist");
       pdfjs.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.mjs`;
       const pdf = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise;
@@ -349,8 +371,42 @@ export function VoltHesap() {
         const page = await pdf.getPage(pageNumber), content = await page.getTextContent();
         text += ` ${content.items.map((item) => "str" in item ? item.str : "").join(" ")}`;
       }
-      setPdfMessage(`${pdf.numPages} sayfa okundu`);
-      const found = extractInvoice(text); setInvoice(found); notify(found ? "Fatura değerleri bulundu" : "Tüketim ve toplam tutar birlikte bulunamadı");
+      let found = extractInvoice(text);
+
+      if (!found) {
+        setPdfMessage("PDF metni bulunamadı; sayfalar OCR ile okunuyor…");
+        const { createWorker } = await import("tesseract.js");
+        const worker = await createWorker(["tur", "eng"], undefined, {
+          logger: ({ status, progress }) => {
+            if (status === "recognizing text") setPdfMessage(`Taranmış PDF okunuyor · %${Math.round(progress * 100)}`);
+          },
+        });
+        let ocrText = "";
+        try {
+          for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+            setPdfMessage(`Taranmış PDF okunuyor · ${pageNumber}/${pdf.numPages}. sayfa`);
+            const page = await pdf.getPage(pageNumber);
+            const initialViewport = page.getViewport({ scale: 1 });
+            const scale = Math.min(2, Math.sqrt(4_000_000 / (initialViewport.width * initialViewport.height)));
+            const viewport = page.getViewport({ scale });
+            const canvas = document.createElement("canvas");
+            canvas.width = Math.ceil(viewport.width);
+            canvas.height = Math.ceil(viewport.height);
+            const context = canvas.getContext("2d");
+            if (!context) throw new Error("Canvas context is unavailable");
+            await page.render({ canvas, canvasContext: context, viewport }).promise;
+            const { data } = await worker.recognize(canvas);
+            ocrText += ` ${data.text}`;
+          }
+        } finally {
+          await worker.terminate();
+        }
+        found = extractInvoice(`${text} ${ocrText}`);
+      }
+
+      setPdfMessage(`${pdf.numPages} sayfa cihazında okundu`);
+      setInvoice(found);
+      notify(found ? "Fatura değerleri bulundu" : "Tüketim ve toplam tutar birlikte bulunamadı");
     } catch { setPdfMessage("Metin otomatik okunamadı; aşağıya yapıştırabilirsin."); }
   }
 
@@ -358,7 +414,7 @@ export function VoltHesap() {
 
   return <>
     <header className="topbar">
-      <a className="brand" href="#top" aria-label="VoltHesap ana sayfa"><span className="brand-mark">V</span><span>VoltHesap</span></a>
+      <a className="brand" href="#top" aria-label="VoltHesap ana sayfa"><BrandLogo priority /></a>
       <nav aria-label="Ana menü"><button type="button" onClick={() => openMode("trip")}>Yol hesabı</button><button type="button" onClick={() => openMode("budget")}>Şarj bütçesi</button><button type="button" onClick={() => openMode("home")}>Ev &amp; fatura</button></nav>
       <Link className="pill" href="/auth/login">Giriş yap <span>↗</span></Link>
     </header>
@@ -484,16 +540,25 @@ export function VoltHesap() {
       {mode === "home" && <section className="invoice" id="fatura">
         <div className="invoice-copy"><span className="kicker">03 / EVDE ŞARJ &amp; FATURA</span><h2>Faturanın ne kadarı<br /><em>araba?</em></h2><p>Fatura burada anlam kazanır: birim fiyatı bulur, evde şarj tahmininle eşleştirir ve araç olmasaydı yaklaşık ne ödeyeceğini gösterir.</p><div className="home-fields"><NumberField light label="Aylık elektrik faturası" help="Araç şarjı dahil ödediğin toplam." unit="₺" value={values.monthlyElectricityBill} onChange={(v) => update("monthlyElectricityBill", v)} /><NumberField light label="Efektif elektrik fiyatı" help="Toplam fatura / toplam tüketim. PDF okuyucu bunu otomatik bulabilir." unit="₺/kWh" step="0.01" value={values.electricity} onChange={(v) => update("electricity", v)} /><NumberField light label="Ayda kaç ev şarjı?" help="Kabloyu takıp enerji aldığın ortalama oturum sayısı." unit="kez" value={values.chargesPerMonth} onChange={(v) => update("chargesPerMonth", v)} /><NumberField light label="Batarya kapasitesi" help="Aracın kullanılabilir batarya kapasitesi." unit="kWh" step="0.1" value={values.batteryCapacity} onChange={(v) => update("batteryCapacity", v)} /><NumberField light label="Başlangıç şarjı" help="Evde şarja taktığındaki ortalama batarya yüzdesi." unit="%" max={100} value={values.startChargePercent} onChange={(v) => update("startChargePercent", v)} /><NumberField light label="Bitiş şarjı" help="Evde şarjı bitirdiğindeki ortalama batarya yüzdesi." unit="%" max={100} value={values.endChargePercent} onChange={(v) => update("endChargePercent", v)} /><NumberField light label="Şarjın ne kadarı evde?" help="Toplam şarj enerjisinin evden alınan yaklaşık oranı." unit="%" max={100} value={values.homeChargingPercent} onChange={(v) => update("homeChargingPercent", v)} /><NumberField light label="Vergi ve fon etkisi" help="Bilmiyorsan 0 bırak; fatura ayrıntıları geldiğinde otomatikleştirilecek." unit="%" value={values.taxAndFundPercent} onChange={(v) => update("taxAndFundPercent", v)} /></div><div className="home-metrics"><Metric label="Aracın fatura payı" help="Evde şarj maliyetinin toplam faturaya oranı." value={`%${format.format(result.electricityBillShare)}`} /><Metric label="Araç olmasaydı" help="Toplam faturadan tahmini evde şarj tutarı çıkarılır." value={`${format.format(result.electricityBillBeforeEv)} ₺`} /><Metric label="Evde şarj" help="Aylık ev şarjlarının toplam tahmini maliyeti." value={`${format.format(result.monthlyHomeChargingCost)} ₺`} /><Metric label="Tahmini vergi/fon" help="Girdiğin oran üzerinden evde şarj payına düşen yaklaşık tutar." value={`${format.format(result.monthlyHomeTax)} ₺`} /></div><div className="privacy"><span>✓</span><div><b>Yerel ve gizli</b><small>PDF yalnızca bu tarayıcıda işlenir.</small></div></div></div>
         <div className="upload-card">
-          {!fileName && <label className={`dropzone${dragging ? " drag" : ""}`} onDragOver={(e) => { e.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={(e: DragEvent<HTMLLabelElement>) => { e.preventDefault(); setDragging(false); const file = e.dataTransfer.files[0]; if (file) readPdf(file); }}><input type="file" accept="application/pdf" hidden onChange={(e: ChangeEvent<HTMLInputElement>) => e.target.files?.[0] && readPdf(e.target.files[0])} /><span className="upload-icon">↥</span><b>PDF faturanı buraya bırak</b><small>veya dosya seçmek için tıkla · Maks. 10 MB</small></label>}
+          {!fileName && <label className={`dropzone${dragging ? " drag" : ""}`} onDragOver={(e) => { e.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={(e: DragEvent<HTMLLabelElement>) => { e.preventDefault(); setDragging(false); const file = e.dataTransfer.files[0]; if (file) readInvoiceFile(file); }}><input type="file" accept="application/pdf,image/jpeg,image/png,image/webp" hidden onChange={(e: ChangeEvent<HTMLInputElement>) => e.target.files?.[0] && readInvoiceFile(e.target.files[0])} /><span className="upload-icon">↥</span><b>Faturanı buraya bırak</b><small>PDF, JPG, PNG veya WebP · Maks. 10 MB</small></label>}
           {fileName && <div className="pdf-status"><div><span>{fileName}</span><small>{pdfMessage}</small></div><button onClick={() => { setFileName(""); setInvoice(null); }} aria-label="Dosyayı kaldır">×</button></div>}
           {invoice && <div className="invoice-result"><div><span>Bulunan tüketim</span><b>{format.format(invoice.kwh)} kWh</b></div><div><span>Bulunan tutar</span><b>{format.format(invoice.total)} ₺</b></div><div className="accent"><span>Efektif birim fiyat</span><b>{format.format(invoice.rate)} ₺/kWh</b><small>Okuma güveni %{Math.round(invoice.confidence * 100)}</small></div>{invoice.lineItems.length > 0 && <div className="invoice-breakdown"><strong>Bulunan fatura kalemleri</strong>{invoice.lineItems.map((item) => <p key={`${item.category}-${item.label}`}><span>{item.label}{item.quantity !== undefined && item.unitPrice !== undefined && <small>{format.format(item.quantity)} {item.unit} × {format.format(item.unitPrice)} ₺/{item.unit}</small>}{item.taxRatePercent !== undefined && <small>%{format.format(item.taxRatePercent)} oran</small>}</span><b>{format.format(item.amount)} ₺</b></p>)}</div>}<button type="button" onClick={() => { setValues((v) => ({ ...v, electricity: Number(invoice.rate.toFixed(2)) })); location.hash = "hesapla"; notify("Birim fiyat hesaba uygulandı"); }}>Bu fiyatla hesapla</button></div>}
-          <details className="manual"><summary>PDF okunmadı mı? Metni yapıştır</summary><textarea rows={4} value={manualText} onChange={(e) => setManualText(e.target.value)} placeholder="Faturadaki tüketim ve toplam tutarın geçtiği bölümü buraya yapıştır…" /><button type="button" onClick={analyzeManual}>Metni analiz et</button></details>
+          <details className="manual"><summary>Belge okunmadı mı? Metni yapıştır</summary><textarea rows={4} value={manualText} onChange={(e) => setManualText(e.target.value)} placeholder="Faturadaki tüketim ve toplam tutarın geçtiği bölümü buraya yapıştır…" /><button type="button" onClick={analyzeManual}>Metni analiz et</button></details>
         </div>
       </section>}
 
       <section className="guide" id="rehber"><div className="section-head"><div><span className="kicker">03 / İPUÇLARI</span><h2>Daha gerçekçi sonuç için</h2></div></div><div className="guide-grid"><article><span>01</span><h3>Göstergeyi referans al</h3><p>Son 500–1.000 km ortalama tüketimin, katalog verisinden daha gerçekçi sonuç verir.</p></article><article><span>02</span><h3>Şarj kaybını unutma</h3><p>Ev tipi AC şarjda kablo, dönüştürücü ve batarya nedeniyle genellikle ek enerji çekilir.</p></article><article><span>03</span><h3>Tarifeni kontrol et</h3><p>Faturandaki toplam bedel ve kWh değerinden efektif birim fiyatını hesaplayabilirsin.</p></article></div></section>
     </main>
-    <footer><div className="brand"><span className="brand-mark">V</span><span>VoltHesap</span></div><p>Elektrikli yolculuğun sade hesabı.</p><span>Sonuçlar tahminidir · © 2026</span></footer>
+    <footer>
+      <div className="brand"><BrandLogo /></div>
+      <p>Elektrikli yolculuğun sade hesabı.</p>
+      <nav className="footer-links" aria-label="İletişim ve geliştirici bağlantıları">
+        <a href="mailto:hello@volthesap.autos?subject=VoltHesap%20hakkında">İletişim</a>
+        <a href="https://ardacimen.dev" target="_blank" rel="noreferrer">Arda Çimen</a>
+        <a href="https://linkedin.com/in/-arda-cimen" target="_blank" rel="noreferrer">LinkedIn</a>
+      </nav>
+      <span>Sonuçlar tahminidir · © 2026</span>
+    </footer>
     <div className={`toast${toast ? " show" : ""}`} role="status">{toast}</div>
   </>;
 }
