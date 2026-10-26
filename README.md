@@ -42,14 +42,14 @@ Then set these public values:
 ```dotenv
 NEXT_PUBLIC_SUPABASE_URL=https://your-project-ref.supabase.co
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=your-publishable-key
-NEXT_PUBLIC_SITE_URL=https://volthesap.autos
+NEXT_PUBLIC_SITE_URL=https://www.volthesap.autos
 ```
 
 `NEXT_PUBLIC_SUPABASE_URL` is the Supabase **Project URL**. It is not a key. The publishable key is a separate value and may be used by browser code when Row Level Security is configured correctly.
 
 Never commit secret keys. A Supabase secret key must not use the `NEXT_PUBLIC_` prefix and must only be available to trusted server-side code. The Vercel Supabase integration can manage the production environment variables automatically.
 
-`NEXT_PUBLIC_SITE_URL` controls canonical URLs, social sharing metadata, the sitemap, and robots metadata. Production defaults to `https://volthesap.autos`; override it for another deployment only when needed.
+`NEXT_PUBLIC_SITE_URL` controls canonical URLs, social sharing metadata, the sitemap, and robots metadata. Production defaults to `https://www.volthesap.autos`; override it for another deployment only when needed.
 
 ## Run the web application
 
