@@ -5,8 +5,8 @@
 - Change set: Initial VoltHesap schema, trip and charging-session records, the sourced EV catalogue, and account-owned custom vehicles
 - Local migration: Applied successfully
 - Local Postgres execution: Passed with Docker Desktop and the local Supabase stack
-- Remote Supabase execution: Not run
-- Remote database changes: None
+- Remote Supabase execution: Applied through `20261026150450`
+- Remote database changes: The first four migrations are applied; the latest catalogue-only migration remains local
 
 ## Migration
 
@@ -14,6 +14,7 @@
 - `supabase/migrations/20261026080006_charging_sessions_and_trip_records.sql`
 - `supabase/migrations/20261026121441_seed_vehicle_catalog.sql`
 - `supabase/migrations/20261026150450_expand_vehicle_catalog_and_custom_vehicles.sql`
+- `supabase/migrations/20261026154106_add_byd_seal_and_tesla_variants.sql`
 
 ## Proposed tables
 
@@ -37,6 +38,8 @@ It seeds verified 2026 charging tariff snapshots and EPDK residential/commercial
 The third migration normalizes the vehicle battery-capacity field, records the capacity basis, adds catalogue ordering and specification notes, and seeds eight sourced EV configurations. Vehicle images are repository assets with CC BY-SA 4.0 attribution stored alongside each database record.
 
 The fourth migration expands the catalogue to 18 sourced EV configurations and allows authenticated users to save a custom vehicle when their model is not listed. The 10 newly added catalogue records intentionally have no image reference until reviewed transparent PNG assets are added to the repository. Guests can use the same custom-vehicle form for a one-off calculation without creating a database record.
+
+The fifth migration expands the catalogue to 23 configurations by adding both Turkey-market BYD SEAL versions, the refreshed short-range Tesla Model Y Premium RWD, the Model Y RWD (Standard), and the standard-range Model 3 Premium RWD. These records intentionally have no image reference until reviewed transparent PNG assets are available.
 
 PDF files and raw PDF text are not stored in the database.
 
@@ -64,11 +67,11 @@ All calculations and analyses work without authentication in the browser. Authen
 
 ## Verification completed
 
-- All three migrations applied to the local Supabase database: Passed
+- All five migrations applied to the local Supabase database: Passed
 - Local database schema lint: Passed
 - Local database security and performance advisors: Passed
 - Local migration-to-schema diff: Empty
-- Seeded EV catalogue record review: Passed (18 active configurations)
+- Seeded EV catalogue record review: Passed (23 active configurations)
 - SQL and repository whitespace review: Passed
 - Invoice parser fixture tests: Passed
 - Application ESLint: Passed
@@ -77,7 +80,7 @@ All calculations and analyses work without authentication in the browser. Authen
 
 ## Verification still required
 
-Review the expanded vehicle catalogue after the fourth migration is available to the application, then test custom-vehicle RLS with two separate authenticated users before applying the migration remotely.
+Review the 23-vehicle catalogue in the application, then test custom-vehicle RLS with two separate authenticated users before applying the latest migration remotely.
 
 The following local checks can be rerun at any time:
 
