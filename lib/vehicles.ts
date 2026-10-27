@@ -24,6 +24,8 @@ export type VehicleCatalogItem = {
   specificationNotes: string | null;
 };
 
+export const VEHICLE_CATALOG_SELECT = "id, slug, make, model, variant, model_year, battery_capacity_kwh, battery_capacity_basis, wltp_range_km, consumption_kwh_100km, body_type, drivetrain, ac_charge_power_kw, dc_charge_power_kw, acceleration_0_100_s, top_speed_kmh, image_url, image_credit, image_license, image_source_url, source_name, source_url, specification_notes";
+
 export type VehicleCatalogRow = {
   id: number;
   slug: string;

@@ -4,10 +4,10 @@ import { extractInvoice, type InvoiceResult } from "@/lib/invoice-parser";
 import { BrandLogo } from "@/components/brand-logo";
 import { fallbackChargingTariffs, formatTariffLabel, type ChargingTariffOption } from "@/lib/charging-tariffs";
 import { createClient } from "@/lib/supabase/client";
-import { mapVehicleRow, type VehicleCatalogItem, type VehicleCatalogRow } from "@/lib/vehicles";
+import { mapVehicleRow, VEHICLE_CATALOG_SELECT, type VehicleCatalogItem, type VehicleCatalogRow } from "@/lib/vehicles";
 import Image from "next/image";
 import Link from "next/link";
-import { ChangeEvent, DragEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, DragEvent, useEffect, useMemo, useRef, useState } from "react";
 
 type Values = {
   distance: number;
@@ -24,6 +24,11 @@ type Values = {
   knownKwhPerCharge: number;
   homeChargingPercent: number;
   monthlyElectricityBill: number;
+  monthlyElectricityConsumption: number;
+  last12MonthsElectricityKwh: number;
+  skttAllInclusiveUnitPrice: number;
+  monthlyHomeChargingKwh: number;
+  fullChargesInBillingPeriod: number;
   monthlyWaterBill: number;
   monthlyHeatingBill: number;
   taxAndFundPercent: number;
@@ -74,6 +79,11 @@ const defaults: Values = {
   knownKwhPerCharge: 36,
   homeChargingPercent: 100,
   monthlyElectricityBill: 1000,
+  monthlyElectricityConsumption: 300,
+  last12MonthsElectricityKwh: 0,
+  skttAllInclusiveUnitPrice: 0,
+  monthlyHomeChargingKwh: 150,
+  fullChargesInBillingPeriod: 2.5,
   monthlyWaterBill: 500,
   monthlyHeatingBill: 1500,
   taxAndFundPercent: 0,
@@ -92,6 +102,13 @@ const chargingLossRates: Record<ChargingSetup, number> = {
   "public-dc": 0.07,
 };
 const format = new Intl.NumberFormat("tr-TR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const TURKEY_DISTRIBUTION_GRID_KG_CO2E_PER_KWH = 0.478;
+const TURKEY_ANNUAL_GHG_PER_CAPITA_KG_CO2E = 6_500;
+const TURKEY_2026_RESIDENTIAL_SKTT_LIMIT_KWH = 4_000;
+const FUEL_KG_CO2_PER_LITER: Record<FuelType, number> = {
+  gasoline: 8.887 / 3.78541,
+  diesel: 10.18 / 3.78541,
+};
 
 function logInvoiceDebug(source: string, rawText: string, parsed: InvoiceResult | null) {
   if (process.env.NODE_ENV === "production") return;
@@ -101,7 +118,8 @@ function logInvoiceDebug(source: string, rawText: string, parsed: InvoiceResult 
   console.groupEnd();
 }
 
-export function VoltHesap() {
+export function VoltHesap({ initialVehicles = [] }: { initialVehicles?: VehicleCatalogItem[] }) {
+  const hasInitialVehicles = initialVehicles.length > 0;
   const [mode, setMode] = useState<CalculatorMode>("trip");
   const [values, setValues] = useState<Values>(defaults);
   const [chargingSetup, setChargingSetup] = useState<ChargingSetup>("wallbox");
@@ -121,7 +139,8 @@ export function VoltHesap() {
     { id: "session-2", tariffId: null, provider: "Diğer istasyon", energyKwh: 15, unitPrice: 9.5, setup: "public-dc" },
   ]);
   const [chargingTariffs, setChargingTariffs] = useState<ChargingTariffOption[]>(fallbackChargingTariffs);
-  const [vehicles, setVehicles] = useState<VehicleCatalogItem[]>([]);
+  const [vehicles, setVehicles] = useState<VehicleCatalogItem[]>(initialVehicles);
+  const [vehicleCatalogMessage, setVehicleCatalogMessage] = useState("");
   const [savedCustomVehicles, setSavedCustomVehicles] = useState<VehicleCatalogItem[]>([]);
   const [userId, setUserId] = useState<string | null>(null);
   const [selectedVehicleId, setSelectedVehicleId] = useState<string | null>(null);
@@ -160,15 +179,25 @@ export function VoltHesap() {
     const supabase = createClient();
     void supabase
       .from("vehicles")
-      .select("id, slug, make, model, variant, model_year, battery_capacity_kwh, battery_capacity_basis, wltp_range_km, consumption_kwh_100km, body_type, drivetrain, ac_charge_power_kw, dc_charge_power_kw, acceleration_0_100_s, top_speed_kmh, image_url, image_credit, image_license, image_source_url, source_name, source_url, specification_notes")
+      .select(VEHICLE_CATALOG_SELECT)
       .eq("is_active", true)
       .order("featured_rank", { ascending: true })
-      .then(({ data }) => {
-        if (!active || !data?.length) return;
-        setVehicles((data as VehicleCatalogRow[]).map(mapVehicleRow));
+      .then(({ data, error }) => {
+        if (!active) return;
+        if (error) {
+          console.error("[VoltHesap vehicles] Catalogue refresh failed", error.message);
+          setVehicleCatalogMessage(hasInitialVehicles ? "Katalogun canlı güncellemesi alınamadı; sunucudan gelen liste kullanılıyor." : "Araç kataloğuna şu anda bağlanılamadı.");
+          return;
+        }
+        if (!data?.length) {
+          setVehicleCatalogMessage(hasInitialVehicles ? "Katalogun sunucu kopyası kullanılıyor." : "Araç kataloğu boş döndü.");
+          return;
+        }
+        setVehicles((data as unknown as VehicleCatalogRow[]).map(mapVehicleRow));
+        setVehicleCatalogMessage("");
       });
     return () => { active = false; };
-  }, []);
+  }, [hasInitialVehicles]);
 
   useEffect(() => {
     const url = new URL(window.location.href);
@@ -244,8 +273,8 @@ export function VoltHesap() {
       : values.batteryCapacity * Math.max(0, values.endChargePercent - values.startChargePercent) / 100;
     const gridEnergyPerCharge = batteryEnergyPerCharge * lossMultiplier;
     const monthlyGridEnergy = gridEnergyPerCharge * values.chargesPerMonth;
-    const monthlyHomeGridEnergy = monthlyGridEnergy * homeShare;
-    const monthlyPublicGridEnergy = monthlyGridEnergy * (1 - homeShare);
+    const monthlyHomeGridEnergy = mode === "home" ? values.monthlyHomeChargingKwh * lossMultiplier : monthlyGridEnergy * homeShare;
+    const monthlyPublicGridEnergy = mode === "home" ? 0 : monthlyGridEnergy * (1 - homeShare);
     const monthlyHomeChargingCost = monthlyHomeGridEnergy * values.electricity;
     const monthlyPublicChargingCost = monthlyPublicGridEnergy * values.publicElectricity;
     const monthlyChargingCost = monthlyHomeChargingCost + monthlyPublicChargingCost;
@@ -256,6 +285,34 @@ export function VoltHesap() {
     const electricityBillShare = values.monthlyElectricityBill
       ? monthlyHomeChargingCost / values.monthlyElectricityBill * 100
       : 0;
+    const homeChargingDistance = values.consumption
+      ? values.monthlyHomeChargingKwh / values.consumption * 100
+      : 0;
+    const homeComparisonFuelLiters = homeChargingDistance / 100 * values.fuelConsumption;
+    const homeComparisonFuelCost = homeComparisonFuelLiters * values.fuelPrice;
+    const homeChargingSavings = homeComparisonFuelCost - monthlyHomeChargingCost;
+    const homeSavingsBillRatio = values.monthlyElectricityBill
+      ? homeChargingSavings / values.monthlyElectricityBill * 100
+      : 0;
+    const fuelTailpipeEmissions = homeComparisonFuelLiters * FUEL_KG_CO2_PER_LITER[fuelType];
+    const gridChargingEmissions = monthlyHomeGridEnergy * TURKEY_DISTRIBUTION_GRID_KG_CO2E_PER_KWH;
+    const avoidedCarbonKg = Math.max(0, fuelTailpipeEmissions - gridChargingEmissions);
+    const avoidedFuelEmissionPercent = fuelTailpipeEmissions
+      ? avoidedCarbonKg / fuelTailpipeEmissions * 100
+      : 0;
+    const perCapitaImpactPercent = avoidedCarbonKg / TURKEY_ANNUAL_GHG_PER_CAPITA_KG_CO2E * 100;
+    const suggestedNatureDonation = Math.max(0, homeChargingSavings) * 0.01;
+    const annualCarGridEnergy = monthlyHomeGridEnergy * 12;
+    const annualConsumptionIsEstimated = values.last12MonthsElectricityKwh <= 0;
+    const annualElectricityConsumption = annualConsumptionIsEstimated
+      ? values.monthlyElectricityConsumption * 12
+      : values.last12MonthsElectricityKwh;
+    const annualConsumptionWithoutCar = Math.max(0, annualElectricityConsumption - annualCarGridEnergy);
+    const reachesSkttLimit = annualElectricityConsumption >= TURKEY_2026_RESIDENTIAL_SKTT_LIMIT_KWH;
+    const carTriggersSkttLimit = reachesSkttLimit && annualConsumptionWithoutCar < TURKEY_2026_RESIDENTIAL_SKTT_LIMIT_KWH;
+    const skttHeadroom = Math.max(0, TURKEY_2026_RESIDENTIAL_SKTT_LIMIT_KWH - annualElectricityConsumption);
+    const skttCarCost = monthlyHomeGridEnergy * (values.skttAllInclusiveUnitPrice || values.electricity);
+    const skttCarCostDifference = skttCarCost - monthlyHomeChargingCost;
     const annualHouseholdElectricity = electricityBillBeforeEv * 12;
     const annualWater = values.monthlyWaterBill * 12;
     const annualHeating = values.monthlyHeatingBill * 12;
@@ -291,6 +348,7 @@ export function VoltHesap() {
       breakEvenElectricityPrice: energy ? fuel / energy : 0,
       batteryEnergyPerCharge,
       monthlyGridEnergy,
+      monthlyHomeGridEnergy,
       monthlyHomeChargingCost,
       monthlyPublicChargingCost,
       monthlyChargingCost,
@@ -300,11 +358,30 @@ export function VoltHesap() {
       monthlyHomeTax,
       electricityBillBeforeEv,
       electricityBillShare,
+      homeChargingDistance,
+      homeComparisonFuelCost,
+      homeChargingSavings,
+      homeSavingsBillRatio,
+      fuelTailpipeEmissions,
+      gridChargingEmissions,
+      avoidedCarbonKg,
+      avoidedFuelEmissionPercent,
+      perCapitaImpactPercent,
+      suggestedNatureDonation,
+      annualCarGridEnergy,
+      annualConsumptionIsEstimated,
+      annualElectricityConsumption,
+      annualConsumptionWithoutCar,
+      reachesSkttLimit,
+      carTriggersSkttLimit,
+      skttHeadroom,
+      skttCarCost,
+      skttCarCostDifference,
       electricityCoverage,
       waterCoverage,
       heatingCoverage,
     };
-  }, [chargeInputMode, chargingSetup, values]);
+  }, [chargeInputMode, chargingSetup, fuelType, mode, values]);
 
   const tripResult = useMemo(() => {
     const energy = sessions.reduce((sum, session) => sum + session.energyKwh, 0);
@@ -324,6 +401,22 @@ export function VoltHesap() {
 
   function notify(message: string) { setToast(message); window.setTimeout(() => setToast(""), 2200); }
   function update(key: keyof Values, value: string) { setValues((current) => ({ ...current, [key]: Math.max(0, Number(value) || 0) })); }
+  function updateHomeEnergy(value: string) {
+    const energy = Math.max(0, Number(value) || 0);
+    setValues((current) => ({
+      ...current,
+      monthlyHomeChargingKwh: energy,
+      fullChargesInBillingPeriod: current.batteryCapacity ? energy / current.batteryCapacity : 0,
+    }));
+  }
+  function updateFullCharges(value: string) {
+    const charges = Math.max(0, Number(value) || 0);
+    setValues((current) => ({
+      ...current,
+      fullChargesInBillingPeriod: charges,
+      monthlyHomeChargingKwh: charges * current.batteryCapacity,
+    }));
+  }
   function openMode(nextMode: CalculatorMode) { setMode(nextMode); window.setTimeout(() => document.getElementById("hesapla")?.scrollIntoView({ behavior: "smooth" }), 0); }
   function addSession() { setSessions((current) => [...current, { id: crypto.randomUUID(), tariffId: null, provider: "Diğer istasyon", energyKwh: 0, unitPrice: 0, setup: "public-dc" }]); }
   function updateSession(id: string, patch: Partial<ChargeSession>) { setSessions((current) => current.map((session) => session.id === id ? { ...session, ...patch } : session)); }
@@ -334,8 +427,27 @@ export function VoltHesap() {
       ...current,
       batteryCapacity: vehicle.batteryCapacityKwh ?? current.batteryCapacity,
       consumption: vehicle.consumptionKwh100Km,
+      monthlyHomeChargingKwh: mode === "home" && vehicle.batteryCapacityKwh
+        ? current.fullChargesInBillingPeriod * vehicle.batteryCapacityKwh
+        : current.monthlyHomeChargingKwh,
     }));
     notify(`${vehicle.make} ${vehicle.model} değerleri uygulandı`);
+  }
+
+  function applyInvoiceValues(parsed: InvoiceResult, message = "Fatura değerleri otomatik uygulandı") {
+    const taxTotal = parsed.lineItems
+      .filter((item) => item.category === "tax" || item.category === "fund")
+      .reduce((sum, item) => sum + item.amount, 0);
+    setValues((current) => ({
+      ...current,
+      monthlyElectricityBill: Number(parsed.total.toFixed(2)),
+      monthlyElectricityConsumption: Number(parsed.kwh.toFixed(3)),
+      electricity: Number(parsed.rate.toFixed(4)),
+      taxAndFundPercent: parsed.total > 0
+        ? Number(Math.min(100, taxTotal / parsed.total * 100).toFixed(2))
+        : current.taxAndFundPercent,
+    }));
+    notify(message);
   }
 
   async function share() {
@@ -364,8 +476,9 @@ export function VoltHesap() {
           const found = extractInvoice(data.text);
           logInvoiceDebug(`image OCR · ${file.name}`, data.text, found);
           setInvoice(found);
-          setPdfMessage(`Görsel OCR ile okundu · güven %${Math.round(data.confidence)}`);
-          notify(found ? "Fatura değerleri bulundu" : "Tüketim ve toplam tutar birlikte bulunamadı");
+          setPdfMessage(`Görsel okundu · metin kalitesi %${Math.round(data.confidence)}`);
+          if (found) applyInvoiceValues(found);
+          else notify("Tüketim ve toplam tutar birlikte bulunamadı");
         } finally {
           await worker.terminate();
         }
@@ -417,11 +530,15 @@ export function VoltHesap() {
 
       setPdfMessage(`${pdf.numPages} sayfa cihazında okundu`);
       setInvoice(found);
-      notify(found ? "Fatura değerleri bulundu" : "Tüketim ve toplam tutar birlikte bulunamadı");
+      if (found) applyInvoiceValues(found);
+      else notify("Tüketim ve toplam tutar birlikte bulunamadı");
     } catch { setPdfMessage("Metin otomatik okunamadı; aşağıya yapıştırabilirsin."); }
   }
 
-  function analyzeManual() { const found = extractInvoice(manualText); logInvoiceDebug("manual text", manualText, found); setInvoice(found); notify(found ? "Fatura değerleri bulundu" : "Tüketim ve toplam tutar birlikte bulunamadı"); }
+  function analyzeManual() { const found = extractInvoice(manualText); logInvoiceDebug("manual text", manualText, found); setInvoice(found); if (found) applyInvoiceValues(found); else notify("Tüketim ve toplam tutar birlikte bulunamadı"); }
+
+  const invoiceEnergyRate = invoice?.lineItems.find((item) => item.category === "energy")?.unitPrice;
+  const invoiceDistributionRate = invoice?.lineItems.find((item) => item.category === "distribution")?.unitPrice;
 
   return <>
     <header className="topbar">
@@ -468,7 +585,7 @@ export function VoltHesap() {
 
         {mode === "budget" && <>
         <div className="section-head scenario-heading"><div><span className="kicker">02 / ALIŞKANLIK</span><h2>Şarj bütçem</h2></div><p>Günlük kullanımını geleceğe taşı. Sonucu 1, 3, 6 ay ve 1 yıl için ayrı ayrı gör.</p></div>
-        <VehiclePicker vehicles={[...savedCustomVehicles, ...vehicles]} selectedVehicleId={selectedVehicleId} onSelect={selectVehicle} />
+        <VehiclePicker vehicles={[...savedCustomVehicles, ...vehicles]} selectedVehicleId={selectedVehicleId} message={vehicleCatalogMessage} onSelect={selectVehicle} />
         <CustomVehicleCreator
           userId={userId}
           onApply={selectVehicle}
@@ -546,14 +663,75 @@ export function VoltHesap() {
           </aside>
         </div>
         </>}
+
+        {mode === "home" && <div className="home-vehicle-step">
+          <div className="section-head scenario-heading"><div><span className="kicker">03 / ARAÇ</span><h2>Önce arabanı seç</h2></div><p>Batarya ve tüketim değerleri araç kataloğundan gelsin; faturadaki ev şarjını seçtiğin araçla birlikte yorumlayalım.</p></div>
+          <VehiclePicker vehicles={[...savedCustomVehicles, ...vehicles]} selectedVehicleId={selectedVehicleId} message={vehicleCatalogMessage} onSelect={selectVehicle} />
+          <CustomVehicleCreator userId={userId} onApply={selectVehicle} onSaved={(vehicle) => setSavedCustomVehicles((current) => [vehicle, ...current])} onMessage={notify} />
+        </div>}
       </section>
 
       {mode === "home" && <section className="invoice" id="fatura">
-        <div className="invoice-copy"><span className="kicker">03 / EVDE ŞARJ &amp; FATURA</span><h2>Faturanın ne kadarı<br /><em>araba?</em></h2><p>Fatura burada anlam kazanır: birim fiyatı bulur, evde şarj tahmininle eşleştirir ve araç olmasaydı yaklaşık ne ödeyeceğini gösterir.</p><div className="home-fields"><NumberField light label="Aylık elektrik faturası" help="Araç şarjı dahil ödediğin toplam." unit="₺" value={values.monthlyElectricityBill} onChange={(v) => update("monthlyElectricityBill", v)} /><NumberField light label="Efektif elektrik fiyatı" help="Toplam fatura / toplam tüketim. PDF okuyucu bunu otomatik bulabilir." unit="₺/kWh" step="0.01" value={values.electricity} onChange={(v) => update("electricity", v)} /><NumberField light label="Ayda kaç ev şarjı?" help="Kabloyu takıp enerji aldığın ortalama oturum sayısı." unit="kez" value={values.chargesPerMonth} onChange={(v) => update("chargesPerMonth", v)} /><NumberField light label="Batarya kapasitesi" help="Aracın kullanılabilir batarya kapasitesi." unit="kWh" step="0.1" value={values.batteryCapacity} onChange={(v) => update("batteryCapacity", v)} /><NumberField light label="Başlangıç şarjı" help="Evde şarja taktığındaki ortalama batarya yüzdesi." unit="%" max={100} value={values.startChargePercent} onChange={(v) => update("startChargePercent", v)} /><NumberField light label="Bitiş şarjı" help="Evde şarjı bitirdiğindeki ortalama batarya yüzdesi." unit="%" max={100} value={values.endChargePercent} onChange={(v) => update("endChargePercent", v)} /><NumberField light label="Şarjın ne kadarı evde?" help="Toplam şarj enerjisinin evden alınan yaklaşık oranı." unit="%" max={100} value={values.homeChargingPercent} onChange={(v) => update("homeChargingPercent", v)} /><NumberField light label="Vergi ve fon etkisi" help="Bilmiyorsan 0 bırak; fatura ayrıntıları geldiğinde otomatikleştirilecek." unit="%" value={values.taxAndFundPercent} onChange={(v) => update("taxAndFundPercent", v)} /></div><div className="home-metrics"><Metric label="Aracın fatura payı" help="Evde şarj maliyetinin toplam faturaya oranı." value={`%${format.format(result.electricityBillShare)}`} /><Metric label="Araç olmasaydı" help="Toplam faturadan tahmini evde şarj tutarı çıkarılır." value={`${format.format(result.electricityBillBeforeEv)} ₺`} /><Metric label="Evde şarj" help="Aylık ev şarjlarının toplam tahmini maliyeti." value={`${format.format(result.monthlyHomeChargingCost)} ₺`} /><Metric label="Tahmini vergi/fon" help="Girdiğin oran üzerinden evde şarj payına düşen yaklaşık tutar." value={`${format.format(result.monthlyHomeTax)} ₺`} /></div><div className="privacy"><span>✓</span><div><b>Yerel ve gizli</b><small>PDF yalnızca bu tarayıcıda işlenir.</small></div></div></div>
+        <div className="invoice-copy">
+          <span className="kicker">04 / EVDE ŞARJ &amp; FATURA</span>
+          <h2>Faturanın ne kadarı<br /><em>araba?</em></h2>
+          <p>Faturayı üç parçaya ayırırız: elektriğin kendi bedeli, dağıtım bedeli ve vergiler. Böylece 1 kWh için gerçekte ne ödediğin açıkça görünür.</p>
+          <p className="billing-period">{invoice?.billingPeriodStart && invoice.billingPeriodEnd ? <><b>Fatura dönemi:</b> {invoice.billingPeriodStart} – {invoice.billingPeriodEnd}</> : <>Faturanı yüklediğinde ilk ve son sayaç okuma tarihleri burada görünür.</>}</p>
+          <p className="manual-input-note"><span>Sen doldur</span> etiketi olan alanlar faturadan okunmaz; kendi kullanımına göre girmen gerekir.</p>
+          <div className="home-fields">
+            <NumberField light autoFilled label="Toplam elektrik faturası" help="Bu okuma döneminde ev ve araç şarjı için ödediğin toplam fatura." unit="₺ toplam" value={values.monthlyElectricityBill} onChange={(v) => update("monthlyElectricityBill", v)} />
+            <NumberField light autoFilled label="Faturadaki toplam tüketim" help="Ev ve araç birlikte, faturanın tamamında kullanılan elektrik enerjisi." unit="kWh" step="0.001" value={values.monthlyElectricityConsumption} onChange={(v) => update("monthlyElectricityConsumption", v)} />
+            <NumberField light userInput label="Eşdeğer tam şarj" help="Seçili aracın kullanılabilir bataryasının kaç kez tamamen doldurulmasına denk enerji aldığın. Kısmi şarjlar birlikte sayılabilir." unit="tam dolum" step="0.1" value={values.fullChargesInBillingPeriod} onChange={updateFullCharges} />
+            <NumberField light userInput label="Bataryaya eklenen enerji" help="Tam şarj sayısı × seçili aracın kullanılabilir bataryası. Bu alanı değiştirirsen tam şarj sayısı da güncellenir." unit="kWh" step="0.1" value={values.monthlyHomeChargingKwh} onChange={updateHomeEnergy} />
+            <NumberField light autoFilled label="Gerçek 1 kWh maliyeti" help="Fatura toplamının toplam tüketime bölünmüş hali. Elektrik, dağıtım, vergi ve fonların tamamı dahildir." unit="₺/kWh" step="0.0001" value={values.electricity} onChange={(v) => update("electricity", v)} />
+            <NumberField light autoFilled label="Faturadaki vergi payı" help="KDV, elektrik tüketim vergisi ve faturada görünen diğer fonların toplam faturaya oranı. Araç maliyetinin vergi kısmını göstermek için kullanılır." unit="%" step="0.01" max={100} value={values.taxAndFundPercent} onChange={(v) => update("taxAndFundPercent", v)} />
+          </div>
+          {invoice && <div className="invoice-rate-story">
+            <div><span>Elektriğin kendi bedeli</span><b>{invoiceEnergyRate !== undefined ? `${format.format(invoiceEnergyRate)} ₺/kWh` : "Faturada ayrı bulunamadı"}</b></div>
+            <span>+</span>
+            <div><span>Dağıtım bedeli</span><b>{invoiceDistributionRate !== undefined ? `${format.format(invoiceDistributionRate)} ₺/kWh` : "Faturada ayrı bulunamadı"}</b></div>
+            <span>→</span>
+            <div className="total"><span>Her şey dahil gerçek maliyet</span><b>{format.format(invoice.rate)} ₺/kWh</b></div>
+          </div>}
+          <div className="home-metrics bill-metrics"><Metric label="Arabanın faturası" help="Şarj kaybı dahil, aracın şebekeden çektiği enerji × faturadaki her şey dahil gerçek kWh maliyeti." value={`${format.format(result.monthlyHomeChargingCost)} ₺`} /><Metric label="Arabasız elektrik faturası" help="Arabanın tahmini şarj maliyeti toplam faturadan çıkarıldığında evin kalan faturası." value={`${format.format(result.electricityBillBeforeEv)} ₺`} /><Metric label="Aracın fatura payı" help="Şarj kaybı dahil ev şarj maliyetinin toplam faturaya oranı." value={`%${format.format(result.electricityBillShare)}`} /><Metric label="Şebekeden çekilen" help="Bataryaya eklenen enerjiye ev şarjındaki tahmini kayıp eklenir." value={`${format.format(result.monthlyHomeGridEnergy)} kWh`} /></div>
+          {result.monthlyHomeGridEnergy > values.monthlyElectricityConsumption && <p className="invoice-warning">Araç için hesaplanan enerji, faturadaki toplam tüketimden yüksek. “Eşdeğer tam şarj” veya “Bataryaya eklenen enerji” alanını kontrol et.</p>}
+          <details className="sktt-analysis">
+            <summary><span><b>4.000 kWh yıllık sınırını kontrol et</b><small>2026 mesken Son Kaynak Tedarik Tarifesi değerlendirmesi</small></span><strong>{result.reachesSkttLimit ? "Sınırda veya üzerinde" : `${format.format(result.skttHeadroom)} kWh alan var`}</strong></summary>
+            <div className="sktt-body">
+              <p><b>Bu bir aylık fiyat kademesi değil.</b> EPDK, 2026 için meskenlerde yıllık 4.000 kWh ve üzerini yüksek tüketimli son kaynak kapsamına alıyor. Mevcut faturadaki arabanın maliyetini faturanın gerçek, her şey dahil kWh fiyatıyla ayırıyoruz; sınırın gelecek dönem tarifesine etkisini ayrıca gösteriyoruz.</p>
+              <div className="sktt-inputs">
+                <NumberField light userInput label="Son 12 ay toplam tüketim" help="Dağıtım şirketinden veya faturalarından görebileceğin, araç dahil son 12 aylık toplam tüketim. 0 bırakırsan bu faturanın aylık tüketimi 12 ile çarpılarak tahmin edilir." unit="kWh/yıl" step="0.1" value={values.last12MonthsElectricityKwh} onChange={(v) => update("last12MonthsElectricityKwh", v)} />
+                <NumberField light userInput label="SKTT her şey dahil fiyatı" help="Tedarikçin sana farklı bir her şey dahil SKTT fiyatı verdiyse yaz. Bilinmiyorsa 0 bırak; sistem fiyat uydurmaz." unit="₺/kWh" step="0.0001" value={values.skttAllInclusiveUnitPrice} onChange={(v) => update("skttAllInclusiveUnitPrice", v)} />
+              </div>
+              <div className="home-metrics sktt-metrics"><Metric label="Değerlendirilen yıllık tüketim" help={result.annualConsumptionIsEstimated ? "Aylık fatura tüketimi × 12 ile tahmin edildi." : "Girdiğin son 12 ay toplam tüketimi kullanıldı."} value={`${format.format(result.annualElectricityConsumption)} kWh`} /><Metric label="Arabasız yıllık tahmin" help="Yıllık toplamdan mevcut aylık şarj alışkanlığının 12 aylık karşılığı çıkarılır." value={`${format.format(result.annualConsumptionWithoutCar)} kWh`} /><Metric label="Araç eşiği geçiriyor mu?" help="Araçsız tahmin 4.000 kWh altındayken araçlı toplam 4.000 kWh veya üzerindeyse evet." value={result.carTriggersSkttLimit ? "Evet, tahminen" : "Hayır / zaten üzerinde"} /><Metric label="SKTT fiyatıyla araba" help="SKTT fiyatını yazdıysan aracın aylık enerji maliyeti o fiyatla yeniden hesaplanır; yazmadıysan mevcut fatura fiyatı korunur." value={`${format.format(result.skttCarCost)} ₺`} /></div>
+              {values.skttAllInclusiveUnitPrice > 0 && <p className="sktt-difference">Girilen SKTT fiyatıyla arabanın aylık maliyet farkı: <b>{result.skttCarCostDifference >= 0 ? "+" : "−"}{format.format(Math.abs(result.skttCarCostDifference))} ₺</b></p>}
+              <a href="https://epdk.gov.tr/Detay/Icerik/16-38/son-kaynak-tedarik-tarifesi-sktt-sikca-sorulan-" target="_blank" rel="noreferrer">EPDK: SKTT hakkında resmî açıklama ↗</a>
+            </div>
+          </details>
+          <details className="home-comparison">
+            <summary><span><b>Elektrikli kullanımın etkisini gör</b><small>Yakıt karşılığı, cebinde kalan ve doğaya katkın</small></span><strong>{result.homeChargingSavings >= 0 ? `${format.format(result.homeChargingSavings)} ₺ avantaj` : "Karşılaştır"}</strong></summary>
+            <div className="home-comparison-body">
+              <div className="home-comparison-inputs">
+                <SelectField light label="Karşılaştırma yakıtı" help="Aynı tahmini kilometreyi hangi yakıtlı araçla kıyaslayacağımız." value={fuelType} onChange={(value) => setFuelType(value as FuelType)} options={[{ value: "gasoline", label: "Benzin" }, { value: "diesel", label: "Dizel" }]} />
+                <NumberField light userInput label={`${fuelType === "diesel" ? "Dizel" : "Benzinli"} araç tüketimi`} help="Karşılaştırdığın aracın 100 km'deki ortalama yakıt tüketimi." unit="L/100 km" step="0.1" value={values.fuelConsumption} onChange={(v) => update("fuelConsumption", v)} />
+                <NumberField light userInput label={`${fuelType === "diesel" ? "Motorin" : "Benzin"} fiyatı`} help="Karşılaştırma için güncel litre fiyatı." unit="₺/L" step="0.01" value={values.fuelPrice} onChange={(v) => update("fuelPrice", v)} />
+              </div>
+              <div className="home-metrics comparison-metrics"><Metric label="Tahmini elektrikli km" help="Bataryaya eklenen enerji, seçili aracın katalog tüketimine bölünür. Katalog değeri WLTP'dir; kendi tüketim değerini kullandıysan hesap onu esas alır." value={`${format.format(result.homeChargingDistance)} km`} /><Metric label={`${fuelType === "diesel" ? "Dizel" : "Benzinli"} araç maliyeti`} help="Aynı tahmini kilometrenin seçilen yakıtlı araçla maliyeti." value={`${format.format(result.homeComparisonFuelCost)} ₺`} /><Metric label="Cebinde kalan" help="Yakıtlı araç maliyetinden elektrikli aracın şarj maliyeti çıkarılır." value={`${result.homeChargingSavings < 0 ? "−" : ""}${format.format(Math.abs(result.homeChargingSavings))} ₺`} /><Metric label="Faturana göre avantaj" help="Elektrikli araç sayesinde kalan tutarın toplam elektrik faturasına oranı." value={`${result.homeSavingsBillRatio < 0 ? "−" : ""}%${format.format(Math.abs(result.homeSavingsBillRatio))}`} /></div>
+              <div className="nature-impact">
+                <span className="kicker">DOĞAYA KALAN</span>
+                <h3>{format.format(result.avoidedCarbonKg)} kg CO₂e</h3>
+                <p>Bu sürüşlerde yakıtlı aracın tahmini emisyonunun <b>%{format.format(result.avoidedFuelEmissionPercent)}</b>&apos;ini önledin. Bu, Türkiye&apos;de kişi başına düşen yıllık sera gazı emisyonunun yaklaşık <b>%{format.format(result.perCapitaImpactPercent)}</b>&apos;ine denk.</p>
+                <div className="nature-donation"><div><small>Cebinde kalanın %1&apos;i</small><b>{format.format(result.suggestedNatureDonation)} ₺</b><span>Küçük avantajı kalıcı bir iyiliğe dönüştürmek istersen.</span></div><a href="https://www.tema.org.tr/fidan-bagisi-sertifikasiz" target="_blank" rel="noreferrer">TEMA&apos;ya fidan bağışı ↗</a></div>
+              </div>
+              <p className="impact-sources">Tahmin kaynakları: Türkiye dağıtım şebekesi için 0,478 kg CO₂e/kWh (<a href="https://enerji.gov.tr/Media/Dizin/SGB/tr/Faaliyet_Raporlari/2024/ETKB2024_FR.pdf" target="_blank" rel="noreferrer">ETKB</a>), yakıt yanma faktörleri (<a href="https://www.epa.gov/greenvehicles/greenhouse-gas-emissions-typical-passenger-vehicle" target="_blank" rel="noreferrer">EPA</a>) ve kişi başı yıllık 6,5 ton CO₂e (<a href="https://data.tuik.gov.tr/Bulten/Index?dil=2&p=Greenhouse-Gas-Emissions-Statistics-1990-2023-53974" target="_blank" rel="noreferrer">TÜİK</a>).</p>
+            </div>
+          </details>
+          <div className="privacy"><span>✓</span><div><b>Yerel ve gizli</b><small>PDF yalnızca bu tarayıcıda işlenir.</small></div></div>
+        </div>
         <div className="upload-card">
           {!fileName && <label className={`dropzone${dragging ? " drag" : ""}`} onDragOver={(e) => { e.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={(e: DragEvent<HTMLLabelElement>) => { e.preventDefault(); setDragging(false); const file = e.dataTransfer.files[0]; if (file) readInvoiceFile(file); }}><input type="file" accept="application/pdf,image/jpeg,image/png,image/webp" hidden onChange={(e: ChangeEvent<HTMLInputElement>) => e.target.files?.[0] && readInvoiceFile(e.target.files[0])} /><span className="upload-icon">↥</span><b>Faturanı buraya bırak</b><small>PDF, JPG, PNG veya WebP · Maks. 10 MB</small></label>}
           {fileName && <div className="pdf-status"><div><span>{fileName}</span><small>{pdfMessage}</small></div><button onClick={() => { setFileName(""); setInvoice(null); }} aria-label="Dosyayı kaldır">×</button></div>}
-          {invoice && <div className="invoice-result"><div><span>Bulunan tüketim</span><b>{format.format(invoice.kwh)} kWh</b></div><div><span>Bulunan tutar</span><b>{format.format(invoice.total)} ₺</b></div><div className="accent"><span>Efektif birim fiyat</span><b>{format.format(invoice.rate)} ₺/kWh</b><small>Okuma güveni %{Math.round(invoice.confidence * 100)}</small></div>{invoice.lineItems.length > 0 && <div className="invoice-breakdown"><strong>Bulunan fatura kalemleri</strong>{invoice.lineItems.map((item) => <p key={`${item.category}-${item.label}`}><span>{item.label}{item.quantity !== undefined && item.unitPrice !== undefined && <small>{format.format(item.quantity)} {item.unit} × {format.format(item.unitPrice)} ₺/{item.unit}</small>}{item.taxRatePercent !== undefined && <small>%{format.format(item.taxRatePercent)} oran</small>}</span><b>{format.format(item.amount)} ₺</b></p>)}</div>}<button type="button" onClick={() => { setValues((v) => ({ ...v, electricity: Number(invoice.rate.toFixed(2)) })); location.hash = "hesapla"; notify("Birim fiyat hesaba uygulandı"); }}>Bu fiyatla hesapla</button></div>}
+          {invoice && <div className="invoice-result"><div><span>Toplam tüketim</span><b>{format.format(invoice.kwh)} kWh</b></div><div><span>Toplam elektrik faturası</span><b>{format.format(invoice.total)} ₺</b></div><div className="accent"><span>Her şey dahil gerçek 1 kWh maliyeti</span><b>{format.format(invoice.rate)} ₺/kWh</b><small>Fatura alanları %{Math.round(invoice.confidence * 100)} güvenle eşleşti · değerler otomatik uygulandı</small></div>{invoice.lineItems.length > 0 && <div className="invoice-breakdown"><strong>Elektrik, dağıtım ve vergi kalemleri</strong>{invoice.lineItems.map((item) => <p key={`${item.category}-${item.label}`}><span>{item.label}{item.quantity !== undefined && item.unitPrice !== undefined && <small>{format.format(item.quantity)} {item.unit} × {format.format(item.unitPrice)} ₺/{item.unit}</small>}{item.taxRatePercent !== undefined && <small>%{format.format(item.taxRatePercent)} oran</small>}</span><b>{format.format(item.amount)} ₺</b></p>)}</div>}<button type="button" onClick={() => applyInvoiceValues(invoice, "Fatura değerleri yeniden uygulandı")}>Değerleri yeniden uygula</button></div>}
           <details className="manual"><summary>Belge okunmadı mı? Metni yapıştır</summary><textarea rows={4} value={manualText} onChange={(e) => setManualText(e.target.value)} placeholder="Faturadaki tüketim ve toplam tutarın geçtiği bölümü buraya yapıştır…" /><button type="button" onClick={analyzeManual}>Metni analiz et</button></details>
         </div>
       </section>}
@@ -574,9 +752,10 @@ export function VoltHesap() {
   </>;
 }
 
-function VehiclePicker({ vehicles, selectedVehicleId, onSelect }: {
+function VehiclePicker({ vehicles, selectedVehicleId, message, onSelect }: {
   vehicles: VehicleCatalogItem[];
   selectedVehicleId: string | null;
+  message?: string;
   onSelect: (vehicle: VehicleCatalogItem) => void;
 }) {
   const [query, setQuery] = useState("");
@@ -598,6 +777,7 @@ function VehiclePicker({ vehicles, selectedVehicleId, onSelect }: {
       <div><span className="kicker">ARACINI SEÇ</span><h3 id="vehicle-picker-title">Katalog değerleriyle başla</h3></div>
       <p>Modelini seçince batarya ve WLTP tüketimi otomatik gelir. Kendi kullanım ortalamanı biliyorsan aşağıda değiştirebilirsin.</p>
     </div>
+    {message && <p className="vehicle-catalog-message">{message}</p>}
     {vehicles.length > 0 && <label className="vehicle-search">
       <span aria-hidden="true">⌕</span>
       <input
@@ -786,8 +966,8 @@ function TripCalculator({ tripName, tripDistance, sessions, chargingTariffs, res
           <span className="session-index">{String(index + 1).padStart(2, "0")}</span>
           <label><span>İstasyon / tarife</span><select value={session.tariffId ?? "custom"} onChange={(event) => { const tariff = chargingTariffs.find((item) => item.id === event.target.value); if (!tariff) { onUpdateSession(session.id, { tariffId: null }); return; } onUpdateSession(session.id, { tariffId: tariff.id, provider: tariff.network, unitPrice: tariff.priceMax, setup: tariff.connectorType === "AC" ? "public-ac" : "public-dc" }); }}><option value="custom">Diğer / manuel</option>{chargingTariffs.map((tariff) => <option key={tariff.id} value={tariff.id}>{formatTariffLabel(tariff)}</option>)}</select>{!session.tariffId && <input aria-label="İstasyon adı" value={session.provider} onChange={(event) => onUpdateSession(session.id, { provider: event.target.value })} />}</label>
           <label><span>Şarj türü</span><select value={session.setup} onChange={(event) => onUpdateSession(session.id, { setup: event.target.value as ChargingSetup })}><option value="public-dc">Hızlı DC</option><option value="public-ac">Halka açık AC</option><option value="wallbox">Ev wallbox</option><option value="outlet">Ev prizi</option></select></label>
-          <label><span>Alınan enerji</span><div><input type="number" min="0" step="0.1" value={session.energyKwh} onChange={(event) => onUpdateSession(session.id, { energyKwh: Math.max(0, Number(event.target.value) || 0) })} /><small>kWh</small></div></label>
-          <label><span>Birim fiyat</span><div><input type="number" min="0" step="0.01" value={session.unitPrice} onChange={(event) => onUpdateSession(session.id, { unitPrice: Math.max(0, Number(event.target.value) || 0) })} /><small>₺/kWh</small></div></label>
+          <label><span>Alınan enerji</span><div><NumericInput min={0} step="0.1" value={session.energyKwh} onValueChange={(value) => onUpdateSession(session.id, { energyKwh: value })} /><small>kWh</small></div></label>
+          <label><span>Birim fiyat</span><div><NumericInput min={0} step="0.01" value={session.unitPrice} onValueChange={(value) => onUpdateSession(session.id, { unitPrice: value })} /><small>₺/kWh</small></div></label>
           <b className="session-total">{format.format(session.energyKwh * session.unitPrice)} ₺</b>
           <button className="remove-session" type="button" aria-label={`${session.provider} oturumunu kaldır`} onClick={() => onRemoveSession(session.id)}>×</button>
         </div>)}</div>
@@ -802,8 +982,39 @@ function HelpTip({ text }: { text: string }) {
   return <span className="help-tip"><button type="button" aria-label="Açıklamayı göster">?</button><span role="tooltip">{text}</span></span>;
 }
 
-function NumberField({ label, help, unit, value, step = "1", max, light = false, onChange }: { label: string; help: string; unit: string; value: number; step?: string; max?: number; light?: boolean; onChange: (value: string) => void }) {
-  return <label className={light ? "light-field" : ""}><span className="field-title">{label} <HelpTip text={help} /></span><span className="field-unit">{unit}</span><input type="number" min="0" max={max} step={step} value={value} onChange={(event) => onChange(event.target.value)} /></label>;
+function NumberField({ label, help, unit, value, step = "1", max, light = false, userInput = false, autoFilled = false, onChange }: { label: string; help: string; unit: string; value: number; step?: string; max?: number; light?: boolean; userInput?: boolean; autoFilled?: boolean; onChange: (value: string) => void }) {
+  return <label className={`${light ? "light-field" : ""}${userInput ? " user-input-field" : ""}`}><span className="field-title">{label} <HelpTip text={help} />{userInput && <small className="user-input-label">Sen doldur</small>}{autoFilled && <small className="auto-input-label">Faturadan gelir</small>}</span><span className="field-unit">{unit}</span><NumericInput min={0} max={max} step={step} value={value} onValueChange={(nextValue) => onChange(String(nextValue))} /></label>;
+}
+
+function NumericInput({ value, min, max, step = "1", onValueChange }: { value: number; min?: number; max?: number; step?: string; onValueChange: (value: number) => void }) {
+  const [draft, setDraft] = useState(String(value));
+  const focused = useRef(false);
+
+  useEffect(() => {
+    if (!focused.current) setDraft(String(value));
+  }, [value]);
+
+  return <input
+    type="number"
+    min={min}
+    max={max}
+    step={step}
+    value={draft}
+    onFocus={() => { focused.current = true; if (draft === "0") setDraft(""); }}
+    onChange={(event) => {
+      const nextDraft = event.target.value;
+      setDraft(nextDraft);
+      if (nextDraft === "") return;
+      const parsed = Number(nextDraft);
+      if (!Number.isFinite(parsed)) return;
+      onValueChange(Math.min(max ?? Number.POSITIVE_INFINITY, Math.max(min ?? Number.NEGATIVE_INFINITY, parsed)));
+    }}
+    onBlur={() => {
+      focused.current = false;
+      if (draft === "") { setDraft("0"); onValueChange(Math.max(0, min ?? 0)); return; }
+      setDraft(String(value));
+    }}
+  />;
 }
 
 function TextField({ label, help, value, onChange }: { label: string; help: string; value: string; onChange: (value: string) => void }) {

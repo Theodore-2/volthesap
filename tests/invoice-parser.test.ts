@@ -82,6 +82,54 @@ test("extracts Enerjisa table values from OCR text", () => {
   assert.equal(result.lineItems[3].amount, 846.62);
 });
 
+test("reconciles noisy Enerjisa OCR values with invoice table totals", () => {
+  const result = extractInvoice(
+    [
+      "ÖDENECEK TUTAR 8.935,00",
+      "Aktif Enerji Tüketim Bedeli 1.262,680 3,81499667 4.817,12",
+      "Elk. Dağıtım Bedeli 1.262,680 242.490.000 3.061,87",
+      "Vergi ve Fonlar 1.052,85",
+      "Elekt. ve Hvg. Tük. Ver. 240,86",
+      "KDV %10 (Matrah 8.119,85 TL) 811,99 TL",
+      "Fatura Tutarı 8.931,84",
+      "Aktif Enerji Tüketim Bedeli 1.202.680 kWh",
+    ].join(" "),
+  );
+
+  assert.ok(result);
+  assert.equal(result.kwh, 1262.68);
+  assert.equal(result.total, 8935);
+  assert.equal(Number(result.rate.toFixed(4)), 7.0762);
+  assert.equal(result.lineItems[0].amount, 4817.12);
+  assert.equal(Number(result.lineItems[0].unitPrice?.toFixed(8)), 3.81499667);
+  assert.equal(result.lineItems[1].amount, 3061.87);
+  assert.equal(Number(result.lineItems[1].unitPrice?.toFixed(4)), 2.4249);
+  assert.equal(result.lineItems[2].amount, 240.86);
+  assert.equal(result.lineItems[3].amount, 811.99);
+});
+
+test("repairs a shifted tax decimal and infers a missing energy row", () => {
+  const result = extractInvoice(
+    [
+      "Okuma (Gün) 23.06.2026 27.07.2026 35",
+      "Aktif Enerji Tüketim Bedeli 1.202.680 kWh",
+      "Elk. Dağıtım Bedeli 1.262,680 2,42490000 3.061,87",
+      "Vergi ve Fonlar 105.285",
+      "Fatura Tutarı 8.931,84 TL",
+    ].join(" "),
+  );
+
+  assert.ok(result);
+  assert.equal(result.kwh, 1262.68);
+  assert.equal(result.billingPeriodStart, "23.06.2026");
+  assert.equal(result.billingPeriodEnd, "27.07.2026");
+  assert.equal(result.lineItems[0].category, "energy");
+  assert.equal(Number(result.lineItems[0].amount.toFixed(2)), 4817.12);
+  assert.equal(Number(result.lineItems[0].unitPrice?.toFixed(8)), 3.81499667);
+  assert.equal(result.lineItems[1].amount, 3061.87);
+  assert.equal(result.lineItems[2].amount, 1052.85);
+});
+
 test("does not report partial or invalid invoices", () => {
   assert.equal(extractInvoice("Ödenecek tutar 500,00 TL"), null);
   assert.equal(extractInvoice("Tüketim 0 kWh Genel toplam 0 TL"), null);
