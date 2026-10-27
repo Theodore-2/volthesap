@@ -41,6 +41,8 @@ The fourth migration expands the catalogue to 18 sourced EV configurations and a
 
 The fifth migration expands the catalogue to 23 configurations by adding both Turkey-market BYD SEAL versions, the refreshed short-range Tesla Model Y Premium RWD, the Model Y RWD (Standard), and the standard-range Model 3 Premium RWD. These records intentionally have no image reference until reviewed transparent PNG assets are available.
 
+The sixth migration completes the currently missing Tesla battery and Model Y RWD range fields. Because Tesla does not publish usable battery capacity for these configurations, the stored capacities are explicitly documented as third-party catalogue estimates rather than manufacturer-confirmed values.
+
 PDF files and raw PDF text are not stored in the database.
 
 All calculations and analyses work without authentication in the browser. Authentication is required only when a visitor chooses to save history or reports. Guest calculations are not written to the database.
@@ -80,7 +82,7 @@ All calculations and analyses work without authentication in the browser. Authen
 
 ## Verification still required
 
-Review the 23-vehicle catalogue in the application, then test custom-vehicle RLS with two separate authenticated users before applying the latest migration remotely.
+Review the updated Tesla estimates in the application before applying the sixth migration remotely. The migration has not been pushed by Codex.
 
 The following local checks can be rerun at any time:
 

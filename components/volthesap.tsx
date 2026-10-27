@@ -6,14 +6,13 @@ import { fallbackChargingTariffs, formatTariffLabel, type ChargingTariffOption }
 import { createClient } from "@/lib/supabase/client";
 import { mapVehicleRow, VEHICLE_CATALOG_SELECT, type VehicleCatalogItem, type VehicleCatalogRow } from "@/lib/vehicles";
 import Image from "next/image";
-import Link from "next/link";
 import { ChangeEvent, DragEvent, useEffect, useMemo, useRef, useState } from "react";
 
 type Values = {
   distance: number;
-  annualDistance: number;
-  longTripsPerMonth: number;
-  averageLongTripDistance: number;
+  monthlyRoutineDistance: number;
+  extraTripDistance: number;
+  extraTripsCount: number;
   batteryCapacity: number;
   consumption: number;
   electricity: number;
@@ -27,8 +26,10 @@ type Values = {
   monthlyElectricityConsumption: number;
   last12MonthsElectricityKwh: number;
   skttAllInclusiveUnitPrice: number;
-  chargingLossPercent: number;
+  homeChargingLossPercent: number;
+  publicChargingLossPercent: number;
   monthlyHomeChargingKwh: number;
+  homeDistanceOverrideKm: number;
   fullChargesInBillingPeriod: number;
   monthlyWaterBill: number;
   monthlyHeatingBill: number;
@@ -42,7 +43,8 @@ type Values = {
 };
 
 type ChargingSetup = "outlet" | "wallbox" | "public-ac" | "public-dc";
-type ChargeInputMode = "percentage" | "energy";
+type ChargingLocation = "home" | "public" | "mixed";
+type ExtraTripRepeat = "once" | "monthly";
 type FuelType = "gasoline" | "diesel";
 type CalculatorMode = "trip" | "budget" | "home";
 
@@ -67,9 +69,9 @@ type SavedCustomVehicleRow = {
 
 const defaults: Values = {
   distance: 100,
-  annualDistance: 15000,
-  longTripsPerMonth: 1,
-  averageLongTripDistance: 300,
+  monthlyRoutineDistance: 1000,
+  extraTripDistance: 300,
+  extraTripsCount: 1,
   batteryCapacity: 60,
   consumption: 17.5,
   electricity: 3,
@@ -83,8 +85,10 @@ const defaults: Values = {
   monthlyElectricityConsumption: 300,
   last12MonthsElectricityKwh: 0,
   skttAllInclusiveUnitPrice: 0,
-  chargingLossPercent: 10,
+  homeChargingLossPercent: 10,
+  publicChargingLossPercent: 7,
   monthlyHomeChargingKwh: 150,
+  homeDistanceOverrideKm: 0,
   fullChargesInBillingPeriod: 2.5,
   monthlyWaterBill: 500,
   monthlyHeatingBill: 1500,
@@ -103,6 +107,7 @@ const chargingLossRates: Record<ChargingSetup, number> = {
   "public-ac": 0.09,
   "public-dc": 0.07,
 };
+const ENABLE_ACCOUNTS = false;
 const format = new Intl.NumberFormat("tr-TR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const TURKEY_DISTRIBUTION_GRID_KG_CO2E_PER_KWH = 0.478;
 const TURKEY_ANNUAL_GHG_PER_CAPITA_KG_CO2E = 6_500;
@@ -124,8 +129,10 @@ export function VoltHesap({ initialVehicles = [] }: { initialVehicles?: VehicleC
   const hasInitialVehicles = initialVehicles.length > 0;
   const [mode, setMode] = useState<CalculatorMode>("trip");
   const [values, setValues] = useState<Values>(defaults);
-  const [chargingSetup, setChargingSetup] = useState<ChargingSetup>("wallbox");
-  const [chargeInputMode, setChargeInputMode] = useState<ChargeInputMode>("percentage");
+  const [homeChargingSetup, setHomeChargingSetup] = useState<ChargingSetup>("wallbox");
+  const [publicChargingSetup, setPublicChargingSetup] = useState<ChargingSetup>("public-dc");
+  const [chargingLocation, setChargingLocation] = useState<ChargingLocation>("home");
+  const [extraTripRepeat, setExtraTripRepeat] = useState<ExtraTripRepeat>("monthly");
   const [fuelType, setFuelType] = useState<FuelType>("gasoline");
   const [projectionMonths, setProjectionMonths] = useState(1);
   const [toast, setToast] = useState("");
@@ -156,9 +163,14 @@ export function VoltHesap({ initialVehicles = [] }: { initialVehicles?: VehicleC
       (Object.keys(next) as (keyof Values)[]).forEach((key) => { const incoming = Number(params.get(key)); if (Number.isFinite(incoming) && params.has(key)) next[key] = incoming; });
       return next;
     });
+    const savedLocation = params.get("chargingLocation");
+    if (savedLocation === "home" || savedLocation === "public" || savedLocation === "mixed") setChargingLocation(savedLocation);
+    const savedRepeat = params.get("extraTripRepeat");
+    if (savedRepeat === "once" || savedRepeat === "monthly") setExtraTripRepeat(savedRepeat);
   }, []);
 
   useEffect(() => {
+    if (!ENABLE_ACCOUNTS) return;
     let active = true;
     const supabase = createClient();
     void supabase.auth.getUser().then(async ({ data }) => {
@@ -203,9 +215,12 @@ export function VoltHesap({ initialVehicles = [] }: { initialVehicles?: VehicleC
 
   useEffect(() => {
     const url = new URL(window.location.href);
+    ["annualDistance", "longTripsPerMonth", "averageLongTripDistance", "chargingLossPercent"].forEach((key) => url.searchParams.delete(key));
     (Object.keys(values) as (keyof Values)[]).forEach((key) => url.searchParams.set(key, String(values[key])));
+    url.searchParams.set("chargingLocation", chargingLocation);
+    url.searchParams.set("extraTripRepeat", extraTripRepeat);
     window.history.replaceState(null, "", url);
-  }, [values]);
+  }, [chargingLocation, extraTripRepeat, values]);
 
   useEffect(() => {
     const stored = window.localStorage.getItem("volthesap-trip-draft");
@@ -252,32 +267,53 @@ export function VoltHesap({ initialVehicles = [] }: { initialVehicles?: VehicleC
     return () => { active = false; };
   }, []);
 
+  const selectedVehicle = useMemo(
+    () => [...savedCustomVehicles, ...vehicles].find((vehicle) => vehicle.id === selectedVehicleId) ?? null,
+    [savedCustomVehicles, selectedVehicleId, vehicles],
+  );
+
   const result = useMemo(() => {
-    const lossRate = Math.min(0.5, Math.max(0, values.chargingLossPercent / 100));
-    const lossMultiplier = 1 / (1 - lossRate);
+    const homeLossRate = Math.min(0.5, Math.max(0, values.homeChargingLossPercent / 100));
+    const publicLossRate = Math.min(0.5, Math.max(0, values.publicChargingLossPercent / 100));
+    const homeLossMultiplier = 1 / (1 - homeLossRate);
+    const publicLossMultiplier = 1 / (1 - publicLossRate);
     const homeShare = Math.min(100, values.homeChargingPercent) / 100;
-    const weightedElectricityPrice = values.electricity * homeShare + values.publicElectricity * (1 - homeShare);
     const batteryEnergy = values.distance / 100 * values.consumption;
-    const energy = batteryEnergy * lossMultiplier;
+    const homeGridEnergy = batteryEnergy * homeShare * homeLossMultiplier;
+    const publicGridEnergy = batteryEnergy * (1 - homeShare) * publicLossMultiplier;
+    const energy = homeGridEnergy + publicGridEnergy;
     const lossEnergy = energy - batteryEnergy;
-    const cost = energy * weightedElectricityPrice;
+    const cost = homeGridEnergy * values.electricity + publicGridEnergy * values.publicElectricity;
     const fuelLiters = values.distance / 100 * values.fuelConsumption;
     const fuel = fuelLiters * values.fuelPrice;
     const difference = fuel - cost;
-    const totalAnnualDistance = values.annualDistance + values.longTripsPerMonth * values.averageLongTripDistance * 12;
-    const annualEnergy = totalAnnualDistance / 100 * values.consumption * lossMultiplier;
-    const annualEvCost = annualEnergy * weightedElectricityPrice;
+    const extraTripDistance = values.extraTripDistance * values.extraTripsCount;
+    const projectedDistance = values.monthlyRoutineDistance * projectionMonths
+      + extraTripDistance * (extraTripRepeat === "monthly" ? projectionMonths : 1);
+    const totalAnnualDistance = values.monthlyRoutineDistance * 12
+      + extraTripDistance * (extraTripRepeat === "monthly" ? 12 : 1);
+    const projectedBatteryEnergy = projectedDistance / 100 * values.consumption;
+    const projectedHomeGridEnergy = projectedBatteryEnergy * homeShare * homeLossMultiplier;
+    const projectedPublicGridEnergy = projectedBatteryEnergy * (1 - homeShare) * publicLossMultiplier;
+    const projectedEnergy = projectedHomeGridEnergy + projectedPublicGridEnergy;
+    const projectedEvCost = projectedHomeGridEnergy * values.electricity + projectedPublicGridEnergy * values.publicElectricity;
+    const projectedLossEnergy = Math.max(0, projectedEnergy - projectedBatteryEnergy);
+    const projectedLossCost = Math.max(0, projectedEvCost - projectedBatteryEnergy * (values.electricity * homeShare + values.publicElectricity * (1 - homeShare)));
+    const projectedFuelCost = projectedDistance / 100 * values.fuelConsumption * values.fuelPrice;
+    const annualBatteryEnergy = totalAnnualDistance / 100 * values.consumption;
+    const annualHomeGridEnergy = annualBatteryEnergy * homeShare * homeLossMultiplier;
+    const annualPublicGridEnergy = annualBatteryEnergy * (1 - homeShare) * publicLossMultiplier;
+    const annualEvCost = annualHomeGridEnergy * values.electricity + annualPublicGridEnergy * values.publicElectricity;
     const annualFuelCost = totalAnnualDistance / 100 * values.fuelConsumption * values.fuelPrice;
     const annualSavings = annualFuelCost - annualEvCost;
-    const fullChargeEnergy = values.batteryCapacity * lossMultiplier;
-    const batteryEnergyPerCharge = chargeInputMode === "energy"
-      ? values.knownKwhPerCharge
-      : values.batteryCapacity * Math.max(0, values.endChargePercent - values.startChargePercent) / 100;
-    const gridEnergyPerCharge = batteryEnergyPerCharge * lossMultiplier;
-    const monthlyGridEnergy = gridEnergyPerCharge * values.chargesPerMonth;
-    const monthlyHomeGridEnergy = mode === "home" ? values.monthlyHomeChargingKwh * lossMultiplier : monthlyGridEnergy * homeShare;
+    const fullChargeEnergy = values.batteryCapacity * (homeShare * homeLossMultiplier + (1 - homeShare) * publicLossMultiplier);
+    const batteryEnergyPerCharge = values.batteryCapacity * Math.max(0, values.endChargePercent - values.startChargePercent) / 100;
+    const homeGridEnergyPerCharge = batteryEnergyPerCharge * homeShare * homeLossMultiplier;
+    const publicGridEnergyPerCharge = batteryEnergyPerCharge * (1 - homeShare) * publicLossMultiplier;
+    const monthlyGridEnergy = (homeGridEnergyPerCharge + publicGridEnergyPerCharge) * values.chargesPerMonth;
+    const monthlyHomeGridEnergy = mode === "home" ? values.monthlyHomeChargingKwh * homeLossMultiplier : homeGridEnergyPerCharge * values.chargesPerMonth;
     const monthlyHomeLossEnergy = Math.max(0, monthlyHomeGridEnergy - values.monthlyHomeChargingKwh);
-    const monthlyPublicGridEnergy = mode === "home" ? 0 : monthlyGridEnergy * (1 - homeShare);
+    const monthlyPublicGridEnergy = mode === "home" ? 0 : publicGridEnergyPerCharge * values.chargesPerMonth;
     const monthlyHomeChargingCost = monthlyHomeGridEnergy * values.electricity;
     const monthlyPublicChargingCost = monthlyPublicGridEnergy * values.publicElectricity;
     const monthlyChargingCost = monthlyHomeChargingCost + monthlyPublicChargingCost;
@@ -288,9 +324,15 @@ export function VoltHesap({ initialVehicles = [] }: { initialVehicles?: VehicleC
     const electricityBillShare = values.monthlyElectricityBill
       ? monthlyHomeChargingCost / values.monthlyElectricityBill * 100
       : 0;
-    const homeChargingDistance = values.consumption
-      ? values.monthlyHomeChargingKwh / values.consumption * 100
+    const conservativeRange = selectedVehicle?.wltpRangeKm
+      ? Math.max(0, selectedVehicle.wltpRangeKm - 100)
       : 0;
+    const automaticHomeDistance = conservativeRange && values.batteryCapacity
+      ? values.monthlyHomeChargingKwh / values.batteryCapacity * conservativeRange
+      : values.consumption ? values.monthlyHomeChargingKwh / values.consumption * 100 : 0;
+    const homeChargingDistance = values.homeDistanceOverrideKm > 0
+      ? values.homeDistanceOverrideKm
+      : automaticHomeDistance;
     const homeComparisonFuelLiters = homeChargingDistance / 100 * values.fuelConsumption;
     const homeComparisonFuelCost = homeComparisonFuelLiters * values.fuelPrice;
     const homeChargingSavings = homeComparisonFuelCost - monthlyHomeChargingCost;
@@ -331,11 +373,12 @@ export function VoltHesap({ initialVehicles = [] }: { initialVehicles?: VehicleC
     const effectiveHomePower = values.chargerPower || estimatedHomePower;
 
     return {
-      lossRate,
+      homeLossRate,
+      publicLossRate,
       batteryEnergy,
       energy,
       lossEnergy,
-      lossCost: lossEnergy * weightedElectricityPrice,
+      lossCost: Math.max(0, cost - batteryEnergy * (values.electricity * homeShare + values.publicElectricity * (1 - homeShare))),
       cost,
       costPerKm: values.distance ? cost / values.distance : 0,
       fuelLiters,
@@ -346,7 +389,7 @@ export function VoltHesap({ initialVehicles = [] }: { initialVehicles?: VehicleC
       annualFuelCost,
       annualSavings,
       totalAnnualDistance,
-      fullChargeCost: fullChargeEnergy * weightedElectricityPrice,
+      fullChargeCost: fullChargeEnergy * (values.electricity * homeShare + values.publicElectricity * (1 - homeShare)),
       estimatedRange: values.consumption ? values.batteryCapacity / values.consumption * 100 : 0,
       breakEvenElectricityPrice: energy ? fuel / energy : 0,
       batteryEnergyPerCharge,
@@ -358,6 +401,16 @@ export function VoltHesap({ initialVehicles = [] }: { initialVehicles?: VehicleC
       monthlyHomeChargingCost,
       monthlyPublicChargingCost,
       monthlyChargingCost,
+      projectedDistance,
+      projectedBatteryEnergy,
+      projectedEnergy,
+      projectedEvCost,
+      projectedLossEnergy,
+      projectedLossCost,
+      projectedFuelCost,
+      projectedSavings: projectedFuelCost - projectedEvCost,
+      projectedHomeGridEnergy,
+      projectedPublicGridEnergy,
       effectiveHomePower,
       monthlyHomeHours: effectiveHomePower ? monthlyHomeGridEnergy / effectiveHomePower : 0,
       monthlyHomeCostBeforeTax,
@@ -387,7 +440,7 @@ export function VoltHesap({ initialVehicles = [] }: { initialVehicles?: VehicleC
       waterCoverage,
       heatingCoverage,
     };
-  }, [chargeInputMode, fuelType, mode, values]);
+  }, [extraTripRepeat, fuelType, mode, projectionMonths, selectedVehicle, values]);
 
   const tripResult = useMemo(() => {
     const energy = sessions.reduce((sum, session) => sum + session.energyKwh, 0);
@@ -407,10 +460,23 @@ export function VoltHesap({ initialVehicles = [] }: { initialVehicles?: VehicleC
 
   function notify(message: string) { setToast(message); window.setTimeout(() => setToast(""), 2200); }
   function update(key: keyof Values, value: string) { setValues((current) => ({ ...current, [key]: Math.max(0, Number(value) || 0) })); }
-  function updateChargingSetup(value: string) {
+  function updateChargingLocation(value: string) {
+    const location = value as ChargingLocation;
+    setChargingLocation(location);
+    setValues((current) => ({
+      ...current,
+      homeChargingPercent: location === "home" ? 100 : location === "public" ? 0 : Math.min(99, Math.max(1, current.homeChargingPercent || 50)),
+    }));
+  }
+  function updateHomeChargingSetup(value: string) {
     const setup = value as ChargingSetup;
-    setChargingSetup(setup);
-    setValues((current) => ({ ...current, chargingLossPercent: chargingLossRates[setup] * 100 }));
+    setHomeChargingSetup(setup);
+    setValues((current) => ({ ...current, homeChargingLossPercent: Math.round(chargingLossRates[setup] * 1000) / 10 }));
+  }
+  function updatePublicChargingSetup(value: string) {
+    const setup = value as ChargingSetup;
+    setPublicChargingSetup(setup);
+    setValues((current) => ({ ...current, publicChargingLossPercent: Math.round(chargingLossRates[setup] * 1000) / 10 }));
   }
   function updateHomeEnergy(value: string) {
     const energy = Math.max(0, Number(value) || 0);
@@ -432,7 +498,12 @@ export function VoltHesap({ initialVehicles = [] }: { initialVehicles?: VehicleC
   function addSession() { setSessions((current) => [...current, { id: crypto.randomUUID(), tariffId: null, provider: "Diğer istasyon", energyKwh: 0, unitPrice: 0, setup: "public-dc" }]); }
   function updateSession(id: string, patch: Partial<ChargeSession>) { setSessions((current) => current.map((session) => session.id === id ? { ...session, ...patch } : session)); }
   function removeSession(id: string) { setSessions((current) => current.length === 1 ? current : current.filter((session) => session.id !== id)); }
-  function selectVehicle(vehicle: VehicleCatalogItem) {
+  function selectVehicle(vehicle: VehicleCatalogItem | null) {
+    if (!vehicle) {
+      setSelectedVehicleId(null);
+      notify("Araç seçimi kaldırıldı");
+      return;
+    }
     setSelectedVehicleId(vehicle.id);
     setValues((current) => ({
       ...current,
@@ -462,7 +533,9 @@ export function VoltHesap({ initialVehicles = [] }: { initialVehicles?: VehicleC
   }
 
   async function share() {
-    const text = `VoltHesap sonucu: ${values.distance} km için tahmini maliyet ${format.format(result.cost)} ₺.`;
+    const text = mode === "budget"
+      ? `VoltHesap sonucu: ${format.format(result.projectedDistance)} km için tahmini maliyet ${format.format(result.projectedEvCost)} ₺.`
+      : `VoltHesap sonucu: ${values.distance} km için tahmini maliyet ${format.format(result.cost)} ₺.`;
     try {
       if (navigator.share) await navigator.share({ title: "VoltHesap sonucum", text, url: location.href });
       else { await navigator.clipboard.writeText(`${text} ${location.href}`); notify("Sonuç bağlantısı kopyalandı"); }
@@ -558,7 +631,7 @@ export function VoltHesap({ initialVehicles = [] }: { initialVehicles?: VehicleC
     <header className="topbar">
       <a className="brand" href="#top" aria-label="VoltHesap ana sayfa"><BrandLogo priority /></a>
       <nav aria-label="Ana menü"><button type="button" onClick={() => openMode("trip")}>Yol hesabı</button><button type="button" onClick={() => openMode("budget")}>Şarj bütçesi</button><button type="button" onClick={() => openMode("home")}>Ev &amp; fatura</button></nav>
-      <Link className="pill" href="/auth/login">Giriş yap <span>↗</span></Link>
+      {ENABLE_ACCOUNTS && <a className="pill" href="/auth/login">Giriş yap <span>↗</span></a>}
     </header>
 
     <main id="top">
@@ -608,41 +681,44 @@ export function VoltHesap({ initialVehicles = [] }: { initialVehicles?: VehicleC
         />
         <div className="calculator">
           <div className="form-panel">
-            <NumberField label="Mesafe" help="Şimdi maliyetini görmek istediğin yol uzunluğu." unit="km" value={values.distance} onChange={(v) => update("distance", v)} />
-            <NumberField label="Rutin yıllık mesafe" help="İşe gidiş ve günlük kullanım gibi uzun yol dışındaki yıllık sürüşün." unit="km / yıl" value={values.annualDistance} onChange={(v) => update("annualDistance", v)} />
-            <NumberField label="Ayda kaç uzun yol?" help="Şehir dışı veya günlük rutinin dışındaki ortalama yolculuk sayısı." unit="kez / ay" value={values.longTripsPerMonth} onChange={(v) => update("longTripsPerMonth", v)} />
-            <NumberField label="Ortalama uzun yol" help="Bir uzun yolculuğun gidiş-dönüş toplam mesafesi." unit="km" value={values.averageLongTripDistance} onChange={(v) => update("averageLongTripDistance", v)} />
+            <NumberField label="Aylık rutin mesafe" help="İşe gidiş, şehir içi ve düzenli kullanımının bir aylık toplamı." unit="km / ay" value={values.monthlyRoutineDistance} onChange={(v) => update("monthlyRoutineDistance", v)} />
+            <NumberField label="Ek yolculuk mesafesi" help="Rutin dışında eklemek istediğin yolculukların toplam mesafesi." unit="km" value={values.extraTripDistance} onChange={(v) => update("extraTripDistance", v)} />
+            <NumberField label="Ek yolculuk sayısı" help="Bu mesafedeki yolculuğu seçilen tekrar düzeninde kaç kez yapacağın." unit="kez" value={values.extraTripsCount} onChange={(v) => update("extraTripsCount", v)} />
+            <SelectField label="Ek yolculuk tekrarı" help="Tek seferlik yol, seçilen tahmin dönemine yalnızca bir kez eklenir." value={extraTripRepeat} onChange={(value) => setExtraTripRepeat(value as ExtraTripRepeat)} options={[{ value: "once", label: "Bu dönemde bir kez" }, { value: "monthly", label: "Her ay" }]} />
             <NumberField label="Kullanılabilir batarya" help="Aracın gerçekten kullanabildiği batarya kapasitesi. Araç seçildiğinde otomatik gelecek." unit="kWh" value={values.batteryCapacity} step="0.1" onChange={(v) => update("batteryCapacity", v)} />
             <NumberField label="Ortalama tüketim" help="Aracın 100 km'de bataryadan harcadığı enerji. Araç seçildiğinde katalog değeriyle başlayacağız." unit="kWh / 100 km" value={values.consumption} step="0.1" onChange={(v) => update("consumption", v)} />
             <NumberField label="Ev elektriği fiyatı" help="Faturandaki toplam tutarın toplam kWh'ye bölünmüş efektif değeri. PDF okuyucu bunu otomatik bulacak." unit="₺ / kWh" value={values.electricity} step="0.01" onChange={(v) => update("electricity", v)} />
-            <NumberField label="Halka açık şarj fiyatı" help="Ev dışında kullandığın istasyonun kWh fiyatı. Evde şarj oranı %100 ise sonucu etkilemez." unit="₺ / kWh" value={values.publicElectricity} step="0.01" onChange={(v) => update("publicElectricity", v)} />
 
             <details open>
               <summary>Şarj alışkanlığın</summary>
               <div className="details-grid">
-                <SelectField label="Genelde nasıl şarj ediyorsun?" help="Teknik güç değerini bilmen gerekmiyor. Seçtiğin yönteme göre başlangıç şarj kaybını otomatik getiriyoruz." value={chargingSetup} onChange={updateChargingSetup} options={[{ value: "outlet", label: "Ev prizi" }, { value: "wallbox", label: "Ev tipi wallbox" }, { value: "public-ac", label: "Halka açık AC" }, { value: "public-dc", label: "Hızlı DC" }]} />
-                <NumberField label="Şarj kaybı" help="Wallbox ile evde AC şarj için %10 genel bir tahmindir. Araç, sıcaklık, şarj gücü ve batarya koşullandırması sonucu değiştirebilir; ölçümün varsa bu oranı değiştirebilirsin." unit="%" step="0.1" max={50} value={values.chargingLossPercent} onChange={(v) => update("chargingLossPercent", v)} />
-                <NumberField label="Ayda kaç kez şarj ediyorsun?" help="Tam dolum olması gerekmiyor; kabloyu takıp enerji aldığın ortalama seans sayısı." unit="kez" value={values.chargesPerMonth} onChange={(v) => update("chargesPerMonth", v)} />
-                <SelectField label="Eklediğin enerjiyi nasıl biliyorsun?" help="Yüzdeleri biliyorsan batarya kapasitesinden, kWh'yi biliyorsan doğrudan hesaplarız." value={chargeInputMode} onChange={(value) => setChargeInputMode(value as ChargeInputMode)} options={[{ value: "percentage", label: "Yüzde olarak" }, { value: "energy", label: "kWh olarak" }]} />
-                {chargeInputMode === "percentage" ? <>
-                  <NumberField label="Genelde yüzde kaçta takıyorsun?" help="Şarja başladığındaki yaklaşık batarya yüzdesi." unit="%" value={values.startChargePercent} onChange={(v) => update("startChargePercent", v)} max={100} />
-                  <NumberField label="Yüzde kaçta çıkarıyorsun?" help="Şarjı bitirdiğindeki yaklaşık batarya yüzdesi." unit="%" value={values.endChargePercent} onChange={(v) => update("endChargePercent", v)} max={100} />
-                </> : <NumberField label="Bir şarjda eklenen enerji" help="Araç veya istasyon uygulamasında gördüğün ortalama enerji." unit="kWh" value={values.knownKwhPerCharge} step="0.1" onChange={(v) => update("knownKwhPerCharge", v)} />}
-                <NumberField label="Şarjın ne kadarı evde?" help="Toplam şarj enerjisinin yaklaşık ne kadarını ev elektriğinden aldığın." unit="%" value={values.homeChargingPercent} onChange={(v) => update("homeChargingPercent", v)} max={100} />
+                <SelectField label="Nerede şarj ediyorsun?" help="Ev, halka açık istasyon veya ikisini birlikte seçebilirsin." value={chargingLocation} onChange={updateChargingLocation} options={[{ value: "home", label: "Evde" }, { value: "public", label: "Dışarıda" }, { value: "mixed", label: "Karışık" }]} />
+                {chargingLocation === "mixed" && <NumberField label="Şarjın ne kadarı evde?" help="Kalan bölüm halka açık istasyon olarak hesaplanır." unit="%" value={values.homeChargingPercent} onChange={(v) => update("homeChargingPercent", v)} max={100} />}
               </div>
-              <p className="estimate-note">Kayıp nedeniyle <b>{format.format(result.lossEnergy)} kWh</b> fazladan çekilir; bunun tahmini bedeli <b>{format.format(result.lossCost)} ₺</b>.</p>
+              <p className="estimate-note">Seçilen dönemde kayıp nedeniyle <b>{format.format(result.projectedLossEnergy)} kWh</b> fazladan çekilir; bunun tahmini bedeli <b>{format.format(result.projectedLossCost)} ₺</b>.</p>
             </details>
 
-            <details>
-              <summary>Evdeki şarj hızını ayrıntılandır</summary>
+            {values.homeChargingPercent > 0 && <details>
+              <summary>Evde şarj ayrıntıları</summary>
               <div className="details-grid">
+                <SelectField label="Evde şarj yöntemi" help="Seçim, önerilen başlangıç kaybını getirir." value={homeChargingSetup} onChange={updateHomeChargingSetup} options={[{ value: "outlet", label: "Ev prizi" }, { value: "wallbox", label: "Ev tipi wallbox" }]} />
+                <NumberField label="Evde şarj kaybı" help="Wallbox için %10 yaygın bir başlangıç tahminidir; araç, sıcaklık, kablo ve güç değerine göre değişebilir." unit="%" step="0.1" max={50} value={values.homeChargingLossPercent} onChange={(v) => update("homeChargingLossPercent", v)} />
                 <NumberField label="Akım" help="Şarj sırasında kullanılan amper. Bilmiyorsan şarj cihazı veya araç ekranına bakabilirsin." unit="A" value={values.homeAmps} onChange={(v) => update("homeAmps", v)} />
                 <NumberField label="Gerilim" help="Türkiye'deki tek faz ev bağlantısında çoğunlukla yaklaşık 230 V kullanılır." unit="V" value={values.homeVoltage} onChange={(v) => update("homeVoltage", v)} />
                 <SelectField label="Faz" help="Ev bağlantının tek faz mı, üç faz mı olduğu." value={String(values.homePhases)} onChange={(v) => update("homePhases", v)} options={[{ value: "1", label: "Tek faz" }, { value: "3", label: "Üç faz" }]} />
                 <NumberField label="Araçta görülen güç" help="Gerçek kW değerini biliyorsan gir. 0 bırakırsan amper × volt × faz ile tahmin ederiz." unit="kW" value={values.chargerPower} step="0.1" onChange={(v) => update("chargerPower", v)} />
               </div>
-              <p className="estimate-note">Hesaplanan ev gücü: <b>{format.format(result.effectiveHomePower)} kW</b> · Aylık yaklaşık <b>{format.format(result.monthlyHomeHours)} saat</b> şarja bağlı.</p>
-            </details>
+              <p className="estimate-note">Hesaplanan ev gücü: <b>{format.format(result.effectiveHomePower)} kW</b> · Seçilen dönemde yaklaşık <b>{format.format(result.effectiveHomePower ? result.projectedHomeGridEnergy / result.effectiveHomePower : 0)} saat</b> şarja bağlı.</p>
+            </details>}
+
+            {values.homeChargingPercent < 100 && <details>
+              <summary>Dışarıda şarj ayrıntıları</summary>
+              <div className="details-grid">
+                <SelectField label="İstasyon türü" help="AC ve hızlı DC için ayrı kayıp başlangıçları kullanılır." value={publicChargingSetup} onChange={updatePublicChargingSetup} options={[{ value: "public-ac", label: "Halka açık AC" }, { value: "public-dc", label: "Hızlı DC" }]} />
+                <NumberField label="Dışarıda şarj kaybı" help="Hızlı DC için %7 genel bir başlangıç tahminidir; aracın sıcaklığı ve güç eğrisi sonucu değiştirir." unit="%" step="0.1" max={50} value={values.publicChargingLossPercent} onChange={(v) => update("publicChargingLossPercent", v)} />
+                <NumberField label="Halka açık şarj fiyatı" help="İstasyonun kWh fiyatı." unit="₺ / kWh" value={values.publicElectricity} step="0.01" onChange={(v) => update("publicElectricity", v)} />
+              </div>
+            </details>}
 
             <details>
               <summary>{fuelType === "diesel" ? "Dizel" : "Benzinli"} araçla karşılaştır</summary>
@@ -653,27 +729,26 @@ export function VoltHesap({ initialVehicles = [] }: { initialVehicles?: VehicleC
               </div>
             </details>
 
-            <p className="hint">Hesaplama, araç seçimi ve fatura analizi ücretsiz ve girişsiz çalışır. Yalnızca geçmişini kaydetmek istersen giriş gerekir.</p>
+            <p className="hint">Hesaplama, araç seçimi ve fatura analizi ücretsiz ve girişsiz çalışır.</p>
           </div>
           <aside className="result-panel" aria-live="polite">
-            <span className="result-label">ALIŞKANLIĞININ MALİYETİ <HelpTip text="Yıllık kilometre ve şarj alışkanlığının seçilen döneme düşen tahmini toplamı." /></span>
+            <span className="result-label">ALIŞKANLIĞININ MALİYETİ <HelpTip text="Aylık rutin mesafe ve ek yolculukların seçilen dönemdeki toplamı." /></span>
             <div className="period-switch">{[1, 3, 6, 12].map((months) => <button type="button" key={months} className={projectionMonths === months ? "active" : ""} onClick={() => setProjectionMonths(months)}>{months === 12 ? "1 yıl" : `${months} ay`}</button>)}</div>
-            <div className="projection-card"><span>{projectionMonths === 12 ? "1 yıllık" : `${projectionMonths} aylık`} tahmini şarj</span><b>{format.format(result.annualEvCost / 12 * projectionMonths)} ₺</b><small>{format.format(result.totalAnnualDistance / 12 * projectionMonths)} km kullanım</small></div>
-            <div className="big-number"><strong>{format.format(result.cost)}</strong><span>₺</span></div>
-            <p>{format.format(values.distance).replace(",00", "")} km yol için, tahmini şarj kaybı dahil</p>
+            <div className="projection-card"><span>{projectionMonths === 12 ? "1 yıllık" : `${projectionMonths} aylık`} tahmini şarj</span><b>{format.format(result.projectedEvCost)} ₺</b><small>{format.format(result.projectedDistance)} km kullanım</small></div>
+            <div className="big-number"><strong>{format.format(result.projectedEvCost)}</strong><span>₺</span></div>
+            <p>{format.format(result.projectedDistance)} km için, ev ve istasyon kayıpları dahil</p>
             <div className="result-grid">
-              <Metric label="Bataryaya giden" help="Aracın sürüş için bataryadan harcayacağı tahmini enerji." value={`${format.format(result.batteryEnergy)} kWh`} />
-              <Metric label="Şebekeden çekilen" help="Şarj dönüşüm kayıpları dahil priz veya istasyondan alınan enerji." value={`${format.format(result.energy)} kWh`} />
-              <Metric label="Aylık şarj maliyeti" help="Şarj sıklığın ve evde şarj oranın kullanılarak hesaplanan ev + istasyon toplamı." value={`${format.format(result.monthlyChargingCost)} ₺`} />
-              <Metric label="Evde şarj gücü" help="Girdiğin gerçek güç veya amper × volt × faz hesabı." value={`${format.format(result.effectiveHomePower)} kW`} />
-              <Metric label="Evde şarj süresi" help="Seçtiğin dönem için evden alınan enerjinin şarj gücüne bölümü." value={`${format.format(result.monthlyHomeHours * projectionMonths)} saat`} />
-              <Metric label="Yıllık elektrik maliyeti" help="Yıllık mesafe, tüketim, kayıp ve ev/istasyon fiyat karışımına göre." value={`${format.format(result.annualEvCost)} ₺`} />
-              <Metric label="Yıllık yakıt maliyeti" help={`Aynı yıllık mesafenin seçtiğin ${fuelType === "diesel" ? "dizel" : "benzinli"} araçla tahmini maliyeti.`} value={`${format.format(result.annualFuelCost)} ₺`} />
-              <Metric label="Yıllık tahmini tasarruf" help="Yakıt maliyetinden elektrik maliyeti çıkarılmıştır; bakım, sigorta ve satın alma fiyatı dahil değildir." value={`${result.annualSavings < 0 ? "−" : ""}${format.format(Math.abs(result.annualSavings))} ₺`} />
+              <Metric label="Eklenen kilometre" help="Rutin ve ek yolculukların seçilen dönemdeki toplamı." value={`${format.format(result.projectedDistance)} km`} />
+              <Metric label="Bataryaya giden" help="Seçilen kilometre için bataryadan harcanan enerji." value={`${format.format(result.projectedBatteryEnergy)} kWh`} />
+              <Metric label="Şebekeden çekilen" help="Ev ve istasyon kayıpları dahil toplam enerji." value={`${format.format(result.projectedEnergy)} kWh`} />
+              {values.homeChargingPercent > 0 && <Metric label="Evden çekilen" help="Evde şarj oranı ve ev kaybına göre." value={`${format.format(result.projectedHomeGridEnergy)} kWh`} />}
+              {values.homeChargingPercent < 100 && <Metric label="İstasyondan çekilen" help="Dışarıda şarj oranı ve istasyon kaybına göre." value={`${format.format(result.projectedPublicGridEnergy)} kWh`} />}
+              <Metric label={`${fuelType === "diesel" ? "Dizel" : "Benzinli"} karşılığı`} help="Aynı kilometrenin seçilen yakıtlı araçla tahmini maliyeti." value={`${format.format(result.projectedFuelCost)} ₺`} />
+              <Metric label="Tahmini tasarruf" help="Yakıt maliyetinden şarj maliyeti çıkarılmıştır." value={`${result.projectedSavings < 0 ? "−" : ""}${format.format(Math.abs(result.projectedSavings))} ₺`} />
               <Metric label="Başa baş elektrik fiyatı" help="Elektrik fiyatı bu seviyeye geldiğinde seçilen yakıtlı araçla enerji maliyetleri eşitlenir." value={`${format.format(result.breakEvenElectricityPrice)} ₺/kWh`} />
             </div>
-            <div className="bar"><span style={{ width: `${result.fuel ? Math.min(100, Math.max(3, result.cost / result.fuel * 100)) : 50}%` }} /></div>
-            <div className="bar-labels"><span>Elektrikli</span><span>%{Math.abs(result.percentage)} {result.difference >= 0 ? "daha düşük" : "daha yüksek"}</span><span>{fuelType === "diesel" ? "Dizel" : "Benzinli"}</span></div>
+            <div className="bar"><span style={{ width: `${result.projectedFuelCost ? Math.min(100, Math.max(3, result.projectedEvCost / result.projectedFuelCost * 100)) : 50}%` }} /></div>
+            <div className="bar-labels"><span>Elektrikli</span><span>{result.projectedSavings >= 0 ? "daha düşük" : "daha yüksek"}</span><span>{fuelType === "diesel" ? "Dizel" : "Benzinli"}</span></div>
             <button className="share" type="button" onClick={share}>Sonucu paylaş <span>↗</span></button>
           </aside>
         </div>
@@ -698,7 +773,8 @@ export function VoltHesap({ initialVehicles = [] }: { initialVehicles?: VehicleC
             <NumberField light autoFilled label="Faturadaki toplam tüketim" help="Ev ve araç birlikte, faturanın tamamında kullanılan elektrik enerjisi." unit="kWh" step="0.001" value={values.monthlyElectricityConsumption} onChange={(v) => update("monthlyElectricityConsumption", v)} />
             <NumberField light userInput label="Eşdeğer tam şarj" help="Seçili aracın kullanılabilir bataryasının kaç kez tamamen doldurulmasına denk enerji aldığın. Kısmi şarjlar birlikte sayılabilir." unit="tam dolum" step="0.1" value={values.fullChargesInBillingPeriod} onChange={updateFullCharges} />
             <NumberField light userInput label="Bataryaya eklenen enerji" help="Tam şarj sayısı × seçili aracın kullanılabilir bataryası. Bu alanı değiştirirsen tam şarj sayısı da güncellenir." unit="kWh" step="0.1" value={values.monthlyHomeChargingKwh} onChange={updateHomeEnergy} />
-            <NumberField light userInput label="Şarj kaybı" help="Ev tipi wallbox için %10 genel bir tahmindir. Araç, sıcaklık, şarj gücü ve batarya koşullandırması gerçek oranı değiştirebilir; ölçümün varsa düzenleyebilirsin." unit="%" step="0.1" max={50} value={values.chargingLossPercent} onChange={(v) => update("chargingLossPercent", v)} />
+            <NumberField light userInput label="Şarj kaybı" help="Ev tipi wallbox için %10 genel bir tahmindir. Araç, sıcaklık, şarj gücü ve batarya koşullandırması gerçek oranı değiştirebilir; ölçümün varsa düzenleyebilirsin." unit="%" step="0.1" max={50} value={values.homeChargingLossPercent} onChange={(v) => update("homeChargingLossPercent", v)} />
+            <NumberField light userInput label="Bu enerjiyle gidilen mesafe" help={selectedVehicle?.wltpRangeKm ? `Otomatik tahmin, seçili aracın WLTP menzilinden 100 km düşülerek hesaplanır. 0 bırakırsan yaklaşık ${format.format(Math.max(0, selectedVehicle.wltpRangeKm - 100))} km tam şarj menzili kullanılır.` : "0 bırakırsan bataryaya eklenen enerji ve ortalama tüketimden otomatik hesaplanır. Gerçek kilometreni biliyorsan buraya yazabilirsin."} unit="km" step="0.1" value={values.homeDistanceOverrideKm} onChange={(v) => update("homeDistanceOverrideKm", v)} />
             <NumberField light autoFilled label="Gerçek 1 kWh maliyeti" help="Fatura toplamının toplam tüketime bölünmüş hali. Elektrik, dağıtım, vergi ve fonların tamamı dahildir." unit="₺/kWh" step="0.0001" value={values.electricity} onChange={(v) => update("electricity", v)} />
             <NumberField light autoFilled label="Faturadaki vergi payı" help="KDV, elektrik tüketim vergisi ve faturada görünen diğer fonların toplam faturaya oranı. Araç maliyetinin vergi kısmını göstermek için kullanılır." unit="%" step="0.01" max={100} value={values.taxAndFundPercent} onChange={(v) => update("taxAndFundPercent", v)} />
           </div>
@@ -774,7 +850,7 @@ function VehiclePicker({ vehicles, selectedVehicleId, message, onSelect }: {
   vehicles: VehicleCatalogItem[];
   selectedVehicleId: string | null;
   message?: string;
-  onSelect: (vehicle: VehicleCatalogItem) => void;
+  onSelect: (vehicle: VehicleCatalogItem | null) => void;
 }) {
   const [query, setQuery] = useState("");
   const selectedVehicle = vehicles.find((vehicle) => vehicle.id === selectedVehicleId) ?? null;
@@ -814,7 +890,7 @@ function VehiclePicker({ vehicles, selectedVehicleId, message, onSelect }: {
           key={vehicle.id}
           className={`vehicle-card${selectedVehicleId === vehicle.id ? " selected" : ""}`}
           aria-pressed={selectedVehicleId === vehicle.id}
-          onClick={() => onSelect(vehicle)}
+          onClick={() => onSelect(selectedVehicleId === vehicle.id ? null : vehicle)}
         >
           <span className="vehicle-image-wrap">{vehicle.imageUrl
             ? <Image className={vehicle.imageUrl.includes("/generated/") ? "generated-vehicle-image" : undefined} src={vehicle.imageUrl} alt={`${vehicle.make} ${vehicle.model}`} width={640} height={360} sizes="(max-width: 800px) 78vw, 235px" />
@@ -934,7 +1010,7 @@ function CustomVehicleCreator({ userId, onApply, onSaved, onMessage }: {
 
   return <details className="custom-vehicle">
     <summary>Aracın listede yok mu?</summary>
-    <p>Bilgilerini bir kez kullanabilir veya giriş yaptıysan hesabına kaydedebilirsin.</p>
+    <p>Listede olmayan aracını bu hesapta tek seferlik kullanabilirsin.</p>
     <div className="custom-vehicle-grid">
       <label><span>Marka</span><input value={make} onChange={(event) => setMake(event.target.value)} placeholder="Örn. Opel" /></label>
       <label><span>Model</span><input value={model} onChange={(event) => setModel(event.target.value)} placeholder="Örn. Corsa Electric" /></label>
@@ -944,7 +1020,7 @@ function CustomVehicleCreator({ userId, onApply, onSaved, onMessage }: {
     </div>
     <div className="custom-vehicle-actions">
       <button type="button" onClick={applyOnce}>Tek seferlik kullan</button>
-      <button type="button" className="primary" disabled={saving} onClick={saveToAccount}>{userId ? (saving ? "Kaydediliyor…" : "Hesabıma kaydet") : "Kaydetmek için giriş yap"}</button>
+      {ENABLE_ACCOUNTS && <button type="button" className="primary" disabled={saving} onClick={saveToAccount}>{userId ? (saving ? "Kaydediliyor…" : "Hesabıma kaydet") : "Kaydetmek için giriş yap"}</button>}
     </div>
   </details>;
 }
