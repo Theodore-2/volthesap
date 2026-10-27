@@ -1,57 +1,87 @@
-# VoltHesap
+<p align="center">
+  <img src="public/brand/volthesap-mark.png" width="88" alt="VoltHesap logo" />
+</p>
 
-VoltHesap is a responsive web application for comparing electric-vehicle charging costs with fuel costs and, later, analysing electricity bills and trip history.
+<h1 align="center">VoltHesap</h1>
 
-The original static interface is preserved in `preview/` as a visual reference.
+<p align="center">
+  Understand the real cost of driving and charging an electric vehicle in Türkiye.
+</p>
+
+<p align="center">
+  <a href="https://www.volthesap.autos">Live website</a> ·
+  <a href="#run-locally">Run locally</a> ·
+  <a href="#contributing">Contribute</a>
+</p>
+
+## About
+
+VoltHesap is an open-source EV cost calculator built for drivers in Türkiye. It combines vehicle data, charging habits, public charging sessions, household electricity bills, charging losses and fuel comparisons in one responsive web application.
+
+The project aims to answer practical questions such as:
+
+- How much did a trip actually cost after charging losses?
+- What will my charging habits cost over 1, 3, 6 or 12 months?
+- How much of my electricity bill belongs to the car?
+- What would the same distance cost with a petrol or diesel vehicle?
+- How much money and carbon could an EV save?
+
+## Features
+
+- Trip cost calculator with multiple charging sessions
+- Monthly charging budget and long-term projections
+- Home, mixed and public charging scenarios
+- Charging-loss and home charging-time estimates
+- EV catalogue with battery, consumption and WLTP data
+- Electricity bill analysis from PDF files and images using browser-side OCR
+- Electricity tariff, distribution charge and tax breakdowns
+- Petrol and diesel cost comparisons
+- Responsive interface for desktop and mobile
+- Optional Supabase-backed vehicle, tariff and user data
+
+## Privacy
+
+Invoice PDF and image parsing runs locally in the browser. The document itself is not uploaded to VoltHesap. Supabase is currently used for public catalogue data and is prepared for optional account features.
 
 ## Technology
 
-- Next.js and TypeScript
+- Next.js, React and TypeScript
 - Tailwind CSS
-- Supabase Auth and Postgres
-- Browser-side PDF parsing
+- Supabase Postgres, Auth and Row Level Security
+- PDF.js and Tesseract.js
+- Vercel Analytics and hosting
 
-## Requirements
+## Run locally
+
+### Requirements
 
 - Node.js 20 or newer
 - npm
-- Docker Desktop, only when running Supabase locally
+- Docker Desktop only when running Supabase locally
 
-## Install dependencies
-
-```bash
-npm install
-```
-
-The project uses `package-lock.json`, so CI and clean environments should use:
+Clone the repository and install dependencies:
 
 ```bash
+git clone https://github.com/Theodore-2/volthesap.git
+cd volthesap
 npm ci
 ```
 
-## Environment variables
-
-Create a local environment file:
+Create your local environment file:
 
 ```bash
 cp .env.example .env.local
 ```
 
-Then set these public values:
+Add your public Supabase configuration:
 
 ```dotenv
 NEXT_PUBLIC_SUPABASE_URL=https://your-project-ref.supabase.co
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=your-publishable-key
-NEXT_PUBLIC_SITE_URL=https://www.volthesap.autos
+NEXT_PUBLIC_SITE_URL=http://localhost:3000
 ```
 
-`NEXT_PUBLIC_SUPABASE_URL` is the Supabase **Project URL**. It is not a key. The publishable key is a separate value and may be used by browser code when Row Level Security is configured correctly.
-
-Never commit secret keys. A Supabase secret key must not use the `NEXT_PUBLIC_` prefix and must only be available to trusted server-side code. The Vercel Supabase integration can manage the production environment variables automatically.
-
-`NEXT_PUBLIC_SITE_URL` controls canonical URLs, social sharing metadata, the sitemap, and robots metadata. Production defaults to `https://www.volthesap.autos`; override it for another deployment only when needed.
-
-## Run the web application
+Start the development server:
 
 ```bash
 npm run dev
@@ -59,71 +89,74 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000).
 
-## Quality checks
+## Supabase development
+
+The Supabase CLI is installed as a pinned development dependency.
 
 ```bash
-npm run lint
-npm run build
-```
-
-## Local Supabase development
-
-The Supabase CLI is installed as a pinned development dependency. Run all commands from the repository root.
-
-Start the local stack:
-
-```bash
+# Start the local stack
 npm run supabase:start
-```
 
-Reset the local database and apply all migrations and seed data:
-
-```bash
+# Recreate the database from migrations and seed data
 npm run supabase:reset
-```
 
-Lint the local database:
-
-```bash
+# Check the local database
 npm run supabase:lint
-```
 
-Generate TypeScript database types:
-
-```bash
+# Generate TypeScript database types
 npm run supabase:types
-```
 
-Stop the local stack:
-
-```bash
+# Stop the local stack
 npm run supabase:stop
 ```
 
-## Database workflow
-
-Database schema changes belong in versioned SQL files under `supabase/migrations/`. Create a migration with:
+Create schema changes as versioned migrations:
 
 ```bash
 npx supabase migration new descriptive_change_name
 ```
 
-Add repeatable development data to `supabase/seed.sql`. Large application datasets, such as a vehicle catalogue, may be maintained as JSON source files and imported separately, but database schema migrations remain SQL.
+Review and test every migration locally before pushing it to a hosted database.
 
-To connect this checkout to an existing hosted Supabase project later:
+## Security
 
-```bash
-npx supabase login
-npx supabase link --project-ref your-project-ref
-npx supabase db pull
+Only the Supabase project URL and publishable key belong in browser code. These values are designed to be public and are protected by database permissions and Row Level Security.
+
+Never commit or expose any of the following:
+
+- Supabase secret keys
+- The legacy `service_role` key
+- The JWT secret
+- Postgres passwords or connection strings
+- Any `.env` or `.env.local` file
+
+All public-schema tables in this project have Row Level Security enabled. User-owned records are restricted with ownership policies based on `auth.uid()`.
+
+Please report security issues privately to [hello@volthesap.autos](mailto:hello@volthesap.autos) instead of opening a public issue.
+
+## Project structure
+
+```text
+app/                    Next.js routes and metadata
+components/             Application interface
+lib/                    Calculations, invoice parsing and Supabase clients
+public/                  Brand and vehicle assets
+supabase/migrations/     Versioned database schema
+supabase/seed.sql        Repeatable local development data
+tests/                   Focused parser tests
+preview/                 Original static design reference
 ```
 
-Do not run remote migration or deployment commands until the generated SQL has been reviewed and tested locally.
+## Contributing
 
-## Dependency overview
+Issues and pull requests are welcome. Keep repository content, code comments and commit messages in English. Please explain user-facing calculation changes and include their data source when applicable.
 
-- `next`, `react`, and `react-dom`: application framework and UI runtime
-- `@supabase/supabase-js` and `@supabase/ssr`: database and authentication clients
-- `pdfjs-dist`: PDF parsing
-- `tailwindcss`: styling
-- `supabase`: local database, migration, linting, and type-generation CLI
+## License
+
+The source code is available under the [MIT License](LICENSE).
+
+Vehicle names and logos are trademarks of their respective owners. Files under `public/vehicles/` are not granted for reuse under the MIT License unless explicitly stated by their original source.
+
+## Author
+
+Created by [Arda Çimen](https://ardacimen.dev) · [LinkedIn](https://linkedin.com/in/-arda-cimen)
