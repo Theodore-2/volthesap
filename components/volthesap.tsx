@@ -74,7 +74,7 @@ const defaults: Values = {
   extraTripsCount: 1,
   batteryCapacity: 60,
   consumption: 17.5,
-  electricity: 7.0737,
+  electricity: 7.08,
   publicElectricity: 10,
   chargesPerMonth: 8,
   startChargePercent: 20,
@@ -687,7 +687,7 @@ export function VoltHesap({ initialVehicles = [] }: { initialVehicles?: VehicleC
             <SelectField label="Ek yolculuk tekrarı" help="Tek seferlik yol, seçilen tahmin dönemine yalnızca bir kez eklenir." value={extraTripRepeat} onChange={(value) => setExtraTripRepeat(value as ExtraTripRepeat)} options={[{ value: "once", label: "Bu dönemde bir kez" }, { value: "monthly", label: "Her ay" }]} />
             <NumberField label="Kullanılabilir batarya" help="Aracın gerçekten kullanabildiği batarya kapasitesi. Araç seçildiğinde otomatik gelecek." unit="kWh" value={values.batteryCapacity} step="0.1" onChange={(v) => update("batteryCapacity", v)} />
             <NumberField label="Ortalama tüketim" help="Aracın 100 km'de bataryadan harcadığı enerji. Araç seçildiğinde katalog değeriyle başlayacağız." unit="kWh / 100 km" value={values.consumption} step="0.1" onChange={(v) => update("consumption", v)} />
-            <NumberField label="Ev elektriği fiyatı" help="Başlangıçta Türkiye için örnek her şey dahil 7,0737 ₺/kWh kullanılır. Kendi faturandaki toplam tutarı toplam tüketime bölerek daha doğru değer girebilirsin." unit="₺ / kWh" value={values.electricity} step="0.01" onChange={(v) => update("electricity", v)} />
+            <NumberField label="Ev elektriği fiyatı" help="7,08 ₺/kWh yalnızca örnek bir her şey dahil başlangıç değeridir; genel Türkiye tarifesi değildir. Kendi faturandaki toplam tutarı toplam tüketime bölerek doğru değerini bulabilirsin." unit="₺ / kWh" value={values.electricity} step="0.01" onChange={(v) => update("electricity", v)} />
 
             <details open>
               <summary>Şarj alışkanlığın</summary>
