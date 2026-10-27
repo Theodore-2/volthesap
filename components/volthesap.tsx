@@ -74,7 +74,7 @@ const defaults: Values = {
   extraTripsCount: 1,
   batteryCapacity: 60,
   consumption: 17.5,
-  electricity: 3,
+  electricity: 7.0737,
   publicElectricity: 10,
   chargesPerMonth: 8,
   startChargePercent: 20,
@@ -98,7 +98,7 @@ const defaults: Values = {
   homePhases: 1,
   chargerPower: 3.7,
   fuelConsumption: 7,
-  fuelPrice: 50,
+  fuelPrice: 100,
 };
 
 const chargingLossRates: Record<ChargingSetup, number> = {
@@ -687,7 +687,7 @@ export function VoltHesap({ initialVehicles = [] }: { initialVehicles?: VehicleC
             <SelectField label="Ek yolculuk tekrarı" help="Tek seferlik yol, seçilen tahmin dönemine yalnızca bir kez eklenir." value={extraTripRepeat} onChange={(value) => setExtraTripRepeat(value as ExtraTripRepeat)} options={[{ value: "once", label: "Bu dönemde bir kez" }, { value: "monthly", label: "Her ay" }]} />
             <NumberField label="Kullanılabilir batarya" help="Aracın gerçekten kullanabildiği batarya kapasitesi. Araç seçildiğinde otomatik gelecek." unit="kWh" value={values.batteryCapacity} step="0.1" onChange={(v) => update("batteryCapacity", v)} />
             <NumberField label="Ortalama tüketim" help="Aracın 100 km'de bataryadan harcadığı enerji. Araç seçildiğinde katalog değeriyle başlayacağız." unit="kWh / 100 km" value={values.consumption} step="0.1" onChange={(v) => update("consumption", v)} />
-            <NumberField label="Ev elektriği fiyatı" help="Faturandaki toplam tutarın toplam kWh'ye bölünmüş efektif değeri. PDF okuyucu bunu otomatik bulacak." unit="₺ / kWh" value={values.electricity} step="0.01" onChange={(v) => update("electricity", v)} />
+            <NumberField label="Ev elektriği fiyatı" help="Başlangıçta Türkiye için örnek her şey dahil 7,0737 ₺/kWh kullanılır. Kendi faturandaki toplam tutarı toplam tüketime bölerek daha doğru değer girebilirsin." unit="₺ / kWh" value={values.electricity} step="0.01" onChange={(v) => update("electricity", v)} />
 
             <details open>
               <summary>Şarj alışkanlığın</summary>
@@ -734,7 +734,6 @@ export function VoltHesap({ initialVehicles = [] }: { initialVehicles?: VehicleC
           <aside className="result-panel" aria-live="polite">
             <span className="result-label">ALIŞKANLIĞININ MALİYETİ <HelpTip text="Aylık rutin mesafe ve ek yolculukların seçilen dönemdeki toplamı." /></span>
             <div className="period-switch">{[1, 3, 6, 12].map((months) => <button type="button" key={months} className={projectionMonths === months ? "active" : ""} onClick={() => setProjectionMonths(months)}>{months === 12 ? "1 yıl" : `${months} ay`}</button>)}</div>
-            <div className="projection-card"><span>{projectionMonths === 12 ? "1 yıllık" : `${projectionMonths} aylık`} tahmini şarj</span><b>{format.format(result.projectedEvCost)} ₺</b><small>{format.format(result.projectedDistance)} km kullanım</small></div>
             <div className="big-number"><strong>{format.format(result.projectedEvCost)}</strong><span>₺</span></div>
             <p>{format.format(result.projectedDistance)} km için, ev ve istasyon kayıpları dahil</p>
             <div className="result-grid">
@@ -810,7 +809,8 @@ export function VoltHesap({ initialVehicles = [] }: { initialVehicles?: VehicleC
                 <NumberField light userInput label={`${fuelType === "diesel" ? "Dizel" : "Benzinli"} araç tüketimi`} help="Karşılaştırdığın aracın 100 km'deki ortalama yakıt tüketimi." unit="L/100 km" step="0.1" value={values.fuelConsumption} onChange={(v) => update("fuelConsumption", v)} />
                 <NumberField light userInput label={`${fuelType === "diesel" ? "Motorin" : "Benzin"} fiyatı`} help="Karşılaştırma için güncel litre fiyatı." unit="₺/L" step="0.01" value={values.fuelPrice} onChange={(v) => update("fuelPrice", v)} />
               </div>
-              <div className="home-metrics comparison-metrics"><Metric label="Tahmini elektrikli km" help="Bataryaya eklenen enerji, seçili aracın katalog tüketimine bölünür. Katalog değeri WLTP'dir; kendi tüketim değerini kullandıysan hesap onu esas alır." value={`${format.format(result.homeChargingDistance)} km`} /><Metric label={`${fuelType === "diesel" ? "Dizel" : "Benzinli"} araç maliyeti`} help="Aynı tahmini kilometrenin seçilen yakıtlı araçla maliyeti." value={`${format.format(result.homeComparisonFuelCost)} ₺`} /><Metric label="Cebinde kalan" help="Yakıtlı araç maliyetinden elektrikli aracın şarj maliyeti çıkarılır." value={`${result.homeChargingSavings < 0 ? "−" : ""}${format.format(Math.abs(result.homeChargingSavings))} ₺`} /><Metric label="Faturana göre avantaj" help="Elektrikli araç sayesinde kalan tutarın toplam elektrik faturasına oranı." value={`${result.homeSavingsBillRatio < 0 ? "−" : ""}%${format.format(Math.abs(result.homeSavingsBillRatio))}`} /></div>
+              <div className="home-metrics comparison-metrics"><Metric label="Tahmini elektrikli km" help="Bataryaya eklenen enerji ve seçili aracın gerçekçi menzil tahmini kullanılır; istersen gerçek kilometreyi elle girebilirsin." value={`${format.format(result.homeChargingDistance)} km`} /><Metric label={`${fuelType === "diesel" ? "Dizel" : "Benzinli"} araç maliyeti`} help="Aynı tahmini kilometrenin seçilen yakıtlı araçla maliyeti." value={`${format.format(result.homeComparisonFuelCost)} ₺`} /><Metric label="Yol ve faturadan cebinde kalan" help="Yakıtlı araç maliyetinden elektrikli aracın şarj maliyeti çıkarılır." value={`${result.homeChargingSavings < 0 ? "−" : ""}${format.format(Math.abs(result.homeChargingSavings))} ₺`} /><Metric label="Elektrikli araç sayesinde bedavaya gelen fatura" help="Yol maliyetindeki avantajın toplam elektrik faturasına oranı." value={`${result.homeSavingsBillRatio < 0 ? "−" : ""}%${format.format(Math.abs(result.homeSavingsBillRatio))}`} /></div>
+              {result.homeChargingSavings > 0 && <p className="invoice-warning">Elektrikli aracın sayesinde elektrik faturanın yaklaşık <b>%{format.format(result.homeSavingsBillRatio)}</b>&apos;si yol tasarrufunla geri geldi; yol ve elektrik faturası birlikte düşünüldüğünde cebinde <b>{format.format(result.homeChargingSavings)} ₺</b> kaldı.</p>}
               <div className="nature-impact">
                 <span className="kicker">DOĞAYA KALAN</span>
                 <h3>{format.format(result.avoidedCarbonKg)} kg CO₂e</h3>

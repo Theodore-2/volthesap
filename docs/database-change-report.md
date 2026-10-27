@@ -41,7 +41,7 @@ The fourth migration expands the catalogue to 18 sourced EV configurations and a
 
 The fifth migration expands the catalogue to 23 configurations by adding both Turkey-market BYD SEAL versions, the refreshed short-range Tesla Model Y Premium RWD, the Model Y RWD (Standard), and the standard-range Model 3 Premium RWD. These records intentionally have no image reference until reviewed transparent PNG assets are available.
 
-The sixth migration completes the currently missing Tesla battery and Model Y RWD range fields. Because Tesla does not publish usable battery capacity for these configurations, the stored capacities are explicitly documented as third-party catalogue estimates rather than manufacturer-confirmed values.
+The sixth migration completes the currently missing Tesla battery and Model Y RWD range fields. Model Y RWD and Standard use approximately 60 kWh usable capacity and 534 km WLTP range; Long Range RWD uses approximately 75 kWh usable capacity and 622 km WLTP range.
 
 PDF files and raw PDF text are not stored in the database.
 
