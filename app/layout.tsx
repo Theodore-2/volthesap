@@ -12,7 +12,6 @@ export const metadata: Metadata = {
   },
   description: "Elektrikli aracının gerçek şarj maliyetini, tüketimini ve faturadaki birim fiyatını hesapla.",
   applicationName: "VoltHesap",
-  alternates: { canonical: "/" },
   openGraph: {
     type: "website",
     locale: "tr_TR",

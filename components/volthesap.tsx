@@ -6,6 +6,7 @@ import { fallbackChargingTariffs, formatTariffLabel, type ChargingTariffOption }
 import { createClient } from "@/lib/supabase/client";
 import { mapVehicleRow, VEHICLE_CATALOG_SELECT, type VehicleCatalogItem, type VehicleCatalogRow } from "@/lib/vehicles";
 import Image from "next/image";
+import Link from "next/link";
 import { ChangeEvent, DragEvent, useEffect, useMemo, useRef, useState } from "react";
 
 type Values = {
@@ -46,7 +47,7 @@ type ChargingSetup = "outlet" | "wallbox" | "public-ac" | "public-dc";
 type ChargingLocation = "home" | "public" | "mixed";
 type ExtraTripRepeat = "once" | "monthly";
 type FuelType = "gasoline" | "diesel";
-type CalculatorMode = "trip" | "budget" | "home";
+export type CalculatorMode = "trip" | "budget" | "home";
 
 type ChargeSession = {
   id: string;
@@ -125,9 +126,9 @@ function logInvoiceDebug(source: string, rawText: string, parsed: InvoiceResult 
   console.groupEnd();
 }
 
-export function VoltHesap({ initialVehicles = [] }: { initialVehicles?: VehicleCatalogItem[] }) {
+export function VoltHesap({ initialVehicles = [], initialMode = "trip" }: { initialVehicles?: VehicleCatalogItem[]; initialMode?: CalculatorMode }) {
   const hasInitialVehicles = initialVehicles.length > 0;
-  const [mode, setMode] = useState<CalculatorMode>("trip");
+  const mode = initialMode;
   const [values, setValues] = useState<Values>(defaults);
   const [homeChargingSetup, setHomeChargingSetup] = useState<ChargingSetup>("wallbox");
   const [publicChargingSetup, setPublicChargingSetup] = useState<ChargingSetup>("public-dc");
@@ -153,20 +154,39 @@ export function VoltHesap({ initialVehicles = [] }: { initialVehicles?: VehicleC
   const [savedCustomVehicles, setSavedCustomVehicles] = useState<VehicleCatalogItem[]>([]);
   const [userId, setUserId] = useState<string | null>(null);
   const [selectedVehicleId, setSelectedVehicleId] = useState<string | null>(null);
+  const [calculatorDraftLoaded, setCalculatorDraftLoaded] = useState(false);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    // URL parameters are the external source for shareable calculations.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setValues((current) => {
-      const next = { ...current };
-      (Object.keys(next) as (keyof Values)[]).forEach((key) => { const incoming = Number(params.get(key)); if (Number.isFinite(incoming) && params.has(key)) next[key] = incoming; });
-      return next;
+    const stored = window.localStorage.getItem("volthesap-calculator-draft");
+    let draft: Partial<Values> & {
+      chargingLocation?: ChargingLocation;
+      extraTripRepeat?: ExtraTripRepeat;
+      fuelType?: FuelType;
+      homeChargingSetup?: ChargingSetup;
+      publicChargingSetup?: ChargingSetup;
+      selectedVehicleId?: string | null;
+    } = {};
+    try { if (stored) draft = JSON.parse(stored); } catch { /* Ignore an invalid local draft. */ }
+
+    const next = { ...defaults, ...draft };
+    (Object.keys(defaults) as (keyof Values)[]).forEach((key) => {
+      const incoming = Number(params.get(key));
+      if (params.has(key) && Number.isFinite(incoming)) next[key] = incoming;
     });
-    const savedLocation = params.get("chargingLocation");
+    setValues(next);
+
+    const savedLocation = params.get("chargingLocation") ?? draft.chargingLocation;
     if (savedLocation === "home" || savedLocation === "public" || savedLocation === "mixed") setChargingLocation(savedLocation);
-    const savedRepeat = params.get("extraTripRepeat");
+    const savedRepeat = params.get("extraTripRepeat") ?? draft.extraTripRepeat;
     if (savedRepeat === "once" || savedRepeat === "monthly") setExtraTripRepeat(savedRepeat);
+    if (draft.fuelType === "gasoline" || draft.fuelType === "diesel") setFuelType(draft.fuelType);
+    if (draft.homeChargingSetup === "outlet" || draft.homeChargingSetup === "wallbox") setHomeChargingSetup(draft.homeChargingSetup);
+    if (draft.publicChargingSetup === "public-ac" || draft.publicChargingSetup === "public-dc") setPublicChargingSetup(draft.publicChargingSetup);
+    if (typeof draft.selectedVehicleId === "string" || draft.selectedVehicleId === null) setSelectedVehicleId(draft.selectedVehicleId);
+
+    if (params.size) window.history.replaceState(null, "", window.location.pathname);
+    setCalculatorDraftLoaded(true);
   }, []);
 
   useEffect(() => {
@@ -214,13 +234,17 @@ export function VoltHesap({ initialVehicles = [] }: { initialVehicles?: VehicleC
   }, [hasInitialVehicles]);
 
   useEffect(() => {
-    const url = new URL(window.location.href);
-    ["annualDistance", "longTripsPerMonth", "averageLongTripDistance", "chargingLossPercent"].forEach((key) => url.searchParams.delete(key));
-    (Object.keys(values) as (keyof Values)[]).forEach((key) => url.searchParams.set(key, String(values[key])));
-    url.searchParams.set("chargingLocation", chargingLocation);
-    url.searchParams.set("extraTripRepeat", extraTripRepeat);
-    window.history.replaceState(null, "", url);
-  }, [chargingLocation, extraTripRepeat, values]);
+    if (!calculatorDraftLoaded) return;
+    window.localStorage.setItem("volthesap-calculator-draft", JSON.stringify({
+      ...values,
+      chargingLocation,
+      extraTripRepeat,
+      fuelType,
+      homeChargingSetup,
+      publicChargingSetup,
+      selectedVehicleId,
+    }));
+  }, [calculatorDraftLoaded, chargingLocation, extraTripRepeat, fuelType, homeChargingSetup, publicChargingSetup, selectedVehicleId, values]);
 
   useEffect(() => {
     const stored = window.localStorage.getItem("volthesap-trip-draft");
@@ -494,7 +518,6 @@ export function VoltHesap({ initialVehicles = [] }: { initialVehicles?: VehicleC
       monthlyHomeChargingKwh: charges * current.batteryCapacity,
     }));
   }
-  function openMode(nextMode: CalculatorMode) { setMode(nextMode); window.setTimeout(() => document.getElementById("hesapla")?.scrollIntoView({ behavior: "smooth" }), 0); }
   function addSession() { setSessions((current) => [...current, { id: crypto.randomUUID(), tariffId: null, provider: "Diğer istasyon", energyKwh: 0, unitPrice: 0, setup: "public-dc" }]); }
   function updateSession(id: string, patch: Partial<ChargeSession>) { setSessions((current) => current.map((session) => session.id === id ? { ...session, ...patch } : session)); }
   function removeSession(id: string) { setSessions((current) => current.length === 1 ? current : current.filter((session) => session.id !== id)); }
@@ -629,8 +652,8 @@ export function VoltHesap({ initialVehicles = [] }: { initialVehicles?: VehicleC
 
   return <>
     <header className="topbar">
-      <a className="brand" href="#top" aria-label="VoltHesap ana sayfa"><BrandLogo priority /></a>
-      <nav aria-label="Ana menü"><button type="button" onClick={() => openMode("trip")}>Yol hesabı</button><button type="button" onClick={() => openMode("budget")}>Şarj bütçesi</button><button type="button" onClick={() => openMode("home")}>Ev &amp; fatura</button></nav>
+      <Link className="brand" href="/yol-hesabi" aria-label="VoltHesap ana sayfa"><BrandLogo priority /></Link>
+      <nav aria-label="Ana menü"><Link href="/yol-hesabi">Yol hesabı</Link><Link href="/sarj-butcesi">Şarj bütçesi</Link><Link href="/ev-ve-fatura">Ev &amp; fatura</Link></nav>
       {ENABLE_ACCOUNTS && <a className="pill" href="/auth/login">Giriş yap <span>↗</span></a>}
     </header>
 
@@ -639,17 +662,17 @@ export function VoltHesap({ initialVehicles = [] }: { initialVehicles?: VehicleC
         <div className="eyebrow"><span /> Türkiye&apos;nin elektrikli araç maliyet asistanı</div>
         <h1>Her hesap,<br /><em>kendi yolunda.</em></h1>
         <p>Geçmiş bir yolculuğun gerçek maliyetini çıkar, şarj alışkanlığının gelecek aylara etkisini gör veya ev faturanı ayrı bir akışta analiz et.</p>
-        <div className="hero-actions"><button className="button primary" type="button" onClick={() => openMode("trip")}>Yolumu hesapla <span>↓</span></button><button className="button ghost" type="button" onClick={() => openMode("budget")}>Bütçemi öngör</button></div>
+        <div className="hero-actions"><Link className="button primary" href="/yol-hesabi#hesapla">Yolumu hesapla <span>↓</span></Link><Link className="button ghost" href="/sarj-butcesi#hesapla">Bütçemi öngör</Link></div>
         <div className="ticker" aria-label="Örnek hesaplama"><span>ÖRNEK</span><strong>240 km</strong><i>·</i><strong>2 şarj</strong><i>·</i><b>342,50 ₺</b></div>
       </section>
 
       <section className="calculator-wrap" id="hesapla">
         <div className="tool-intro"><span className="kicker">HESAPLAMA MERKEZİ</span><h2>Ne öğrenmek istiyorsun?</h2><p>Her senaryo kendi sorularını sorar. Böylece yolculuk, alışkanlık ve ev faturası birbirine karışmaz.</p></div>
-        <div className="mode-switch" role="tablist" aria-label="Hesap türü">
-          <ModeButton active={mode === "trip"} number="01" title="Yol ne kadara geldi?" description="Gerçek şarj oturumlarını topla" onClick={() => setMode("trip")} />
-          <ModeButton active={mode === "budget"} number="02" title="Şarj bütçem" description="1–12 aylık alışkanlık tahmini" onClick={() => setMode("budget")} />
-          <ModeButton active={mode === "home"} number="03" title="Evde şarj & fatura" description="Faturadaki araç payını ayır" onClick={() => setMode("home")} />
-        </div>
+        <nav className="mode-switch" aria-label="Hesap türü">
+          <ModeButton active={mode === "trip"} number="01" title="Yol ne kadara geldi?" description="Gerçek şarj oturumlarını topla" href="/yol-hesabi#hesapla" />
+          <ModeButton active={mode === "budget"} number="02" title="Şarj bütçem" description="1–12 aylık alışkanlık tahmini" href="/sarj-butcesi#hesapla" />
+          <ModeButton active={mode === "home"} number="03" title="Evde şarj & fatura" description="Faturadaki araç payını ayır" href="/ev-ve-fatura#hesapla" />
+        </nav>
 
         {mode === "trip" && <TripCalculator
           tripName={tripName}
@@ -1025,8 +1048,8 @@ function CustomVehicleCreator({ userId, onApply, onSaved, onMessage }: {
   </details>;
 }
 
-function ModeButton({ active, number, title, description, onClick }: { active: boolean; number: string; title: string; description: string; onClick: () => void }) {
-  return <button type="button" role="tab" aria-selected={active} className={active ? "active" : ""} onClick={onClick}><span>{number}</span><b>{title}</b><small>{description}</small></button>;
+function ModeButton({ active, number, title, description, href }: { active: boolean; number: string; title: string; description: string; href: string }) {
+  return <Link aria-current={active ? "page" : undefined} className={active ? "active" : ""} href={href}><span>{number}</span><b>{title}</b><small>{description}</small></Link>;
 }
 
 function TripCalculator({ tripName, tripDistance, sessions, chargingTariffs, result, fuelType, fuelConsumption, fuelPrice, onTripName, onTripDistance, onFuelType, onFuelConsumption, onFuelPrice, onAddSession, onUpdateSession, onRemoveSession }: {
